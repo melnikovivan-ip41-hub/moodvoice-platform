@@ -1,0 +1,22 @@
+# Python & ML
+**/venv/
+**/__pycache__/
+*.pyc
+ml-service/data/
+
+# Секреты и окружение
+**/.env
+
+# Тестовые аудиозаписи
+*.mp3
+*.wav
+*.webm
+
+# Java / Spring Boot (на будущее)
+**/target/
+.idea/
+*.iml
+
+# OS / Editors
+.DS_Store
+Thumbs.db

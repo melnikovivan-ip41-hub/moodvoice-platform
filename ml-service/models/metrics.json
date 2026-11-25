@@ -1,0 +1,40 @@
+{
+  "datasets": "RAVDESS (1440) + TESS (400)",
+  "train_samples_augmented": 4096,
+  "test_samples": 368,
+  "classes": [
+    "calm",
+    "joy",
+    "sadness",
+    "stress"
+  ],
+  "weighted_f1_combined": 0.8335,
+  "weighted_f1_ravdess": 0.7978,
+  "weighted_f1_tess": 0.9625,
+  "confusion_matrix": [
+    [
+      74,
+      2,
+      2,
+      0
+    ],
+    [
+      5,
+      76,
+      3,
+      13
+    ],
+    [
+      5,
+      2,
+      45,
+      6
+    ],
+    [
+      1,
+      13,
+      9,
+      112
+    ]
+  ]
+}
