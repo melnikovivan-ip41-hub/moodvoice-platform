@@ -1,23 +1,24 @@
 package com.moodvoice.api.config;
 
 import com.cloudinary.Cloudinary;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.HashMap;
 import java.util.Map;
 
 @Configuration
 public class CloudinaryConfig {
 
     @Bean
-    public Cloudinary cloudinary() {
-        Map<String, String> config = new HashMap<>();
-        // СКОПИРУЙ ЭТИ ТРИ ЗНАЧЕНИЯ ИЗ СВОЕГО КАБИНЕТА CLOUDINARY:
-        config.put("cloud_name", "dpvr9y8d7");
-        config.put("api_key", "248946228945837");
-        config.put("api_secret", "hKdVJ7p8iY7UtQvudsmso00Ha7U");
-        
-        return new Cloudinary(config);
+    public Cloudinary cloudinary(
+            @Value("${cloudinary.cloud-name}") String cloudName,
+            @Value("${cloudinary.api-key}") String apiKey,
+            @Value("${cloudinary.api-secret}") String apiSecret) {
+        return new Cloudinary(Map.of(
+                "cloud_name", cloudName,
+                "api_key", apiKey,
+                "api_secret", apiSecret
+        ));
     }
 }

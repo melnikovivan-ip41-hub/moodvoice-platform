@@ -2,24 +2,26 @@ package com.moodvoice.api.controller;
 
 import com.cloudinary.Cloudinary;
 import com.cloudinary.utils.ObjectUtils;
+import com.moodvoice.api.dto.MlAnalysisResponse;
 import com.moodvoice.api.entity.VoiceRecord;
 import com.moodvoice.api.repository.VoiceRecordRepository;
+import com.moodvoice.api.service.MlServiceClient;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.UrlResource;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.core.io.Resource;
-import org.springframework.core.io.UrlResource;
-import org.springframework.http.MediaType;
-import org.springframework.http.HttpHeaders;
 
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Map;
 import java.util.List;
-
-
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/audio")
@@ -32,50 +34,63 @@ public class AudioController {
     @Autowired
     private Cloudinary cloudinary;
 
+    @Autowired
+    private MlServiceClient mlServiceClient;
+
     @PostMapping("/upload")
-    public ResponseEntity<?> uploadAudio(@RequestParam("file") MultipartFile file, 
+    public ResponseEntity<?> uploadAudio(@RequestParam("file") MultipartFile file,
                                          @RequestParam("email") String email) {
         try {
-            // 1. ВІДПРАВЛЯЄМО ФАЙЛ У CLOUDINARY
-            // Cloudinary сприймає файли .webm як "video", тому обов'язково вказуємо resource_type
+            byte[] audioBytes = file.getBytes();
+
+            // 1. Загружаем аудио в Cloudinary
             @SuppressWarnings("unchecked")
-            Map<String, Object> uploadResult = cloudinary.uploader().upload(file.getBytes(), 
-                    ObjectUtils.asMap("resource_type", "video"));
-            
-            // 2. ОТРИМУЄМО ПОСИЛАННЯ НА ФАЙЛ З ХМАРИ
+            Map<String, Object> uploadResult = cloudinary.uploader().upload(
+                    audioBytes,
+                    ObjectUtils.asMap("resource_type", "video")
+            );
             String cloudUrl = uploadResult.get("secure_url").toString();
+            String publicId = uploadResult.get("public_id") != null
+                    ? uploadResult.get("public_id").toString()
+                    : null;
 
-            // --- 3. ІМІТАЦІЯ РОБОТИ AI (MOCK SERVICE) ---
-            String[] transcriptions = {
-                "Сьогодні був довгий день, але я відчуваю спокій. Вдалося завершити важливий проєкт на роботі.",
-                "Трохи турбуюсь через завтрашню пару, треба ще раз перечитати конспект.",
-                "Сьогодні сталося щось чудове! Здав лабораторну роботу на максимальний бал, настрій супер!",
-                "Просто звичайний день. Багато рутини, але загалом все стабільно і добре."
-            };
-            String[] moods = {"Спокій", "Тривога", "Радість", "Баланс"};
-            
-            int randomIndex = (int) (Math.random() * transcriptions.length);
-            String aiText = transcriptions[randomIndex];
-            String aiMood = moods[randomIndex];
-            // ----------------------------------------------
+            // 2. Отправляем аудио на анализ в наш FastAPI ML-сервис
+            MlAnalysisResponse mlResult = mlServiceClient.analyzeAudio(audioBytes, file.getOriginalFilename());
 
-            // 4. ЗБЕРЕЖЕННЯ В БАЗУ ДАНИХ (тепер зберігаємо ПОСИЛАННЯ cloudUrl, а не шлях на диску)
+            // 3. Сохраняем реальные результаты анализа в PostgreSQL
             VoiceRecord record = new VoiceRecord(email, cloudUrl, file.getSize());
-            record.setTranscription(aiText);
-            record.setMoodType(aiMood);
-            voiceRecordRepository.save(record);
+            record.setCloudinaryPublicId(publicId);
+
+            if (mlResult != null) {
+                record.setTranscription(mlResult.transcript());
+                record.setMoodType(mlResult.overall_mood());
+                record.setConfidence(mlResult.confidence());
+                record.setIsLowConfidence(mlResult.is_low_confidence());
+                record.setCrisisDetected(mlResult.crisis_detected());
+                record.setCrisisMessage(mlResult.crisis_message());
+
+                if (mlResult.emotions() != null) {
+                    record.setCalmScore(mlResult.emotions().getOrDefault("calm", 0.0));
+                    record.setJoyScore(mlResult.emotions().getOrDefault("joy", 0.0));
+                    record.setSadnessScore(mlResult.emotions().getOrDefault("sadness", 0.0));
+                    record.setStressScore(mlResult.emotions().getOrDefault("stress", 0.0));
+                }
+            }
+
+            VoiceRecord saved = voiceRecordRepository.save(record);
 
             return ResponseEntity.ok(Map.of(
-                "message", "Аудіо збережено в хмару!",
-                "status", "success",
-                "recordId", record.getId().toString()
+                    "message", "Аудіо збережено та проаналізовано!",
+                    "status", "success",
+                    "recordId", saved.getId().toString(),
+                    "record", saved
             ));
 
         } catch (Exception e) {
-            System.err.println("Помилка завантаження: " + e.getMessage());
+            System.err.println("Помилка завантаження або ML-аналізу: " + e.getMessage());
             return ResponseEntity.internalServerError().body(Map.of(
-                "message", "Помилка сервера: " + e.getMessage(),
-                "status", "error"
+                    "message", "Помилка сервера: " + e.getMessage(),
+                    "status", "error"
             ));
         }
     }
@@ -83,26 +98,29 @@ public class AudioController {
     @GetMapping("/play/{id}")
     public ResponseEntity<Resource> playAudio(@PathVariable Long id) {
         try {
-            // 1. Ищем запись в базе данных по ID
             VoiceRecord record = voiceRecordRepository.findById(id)
-                    .orElseThrow(() -> new RuntimeException("Запись не найдена!"));
+                    .orElseThrow(() -> new RuntimeException("Запис не знайдено"));
 
-            // 2. Берем путь к файлу из базы и находим сам файл
+            // Если файл в Cloudinary — перенаправляем плеер браузера на прямой URL
+            if (record.getFilePath().startsWith("http://") || record.getFilePath().startsWith("https://")) {
+                return ResponseEntity.status(HttpStatus.FOUND)
+                        .location(URI.create(record.getFilePath()))
+                        .build();
+            }
+
             Path filePath = Paths.get(record.getFilePath());
             Resource resource = new UrlResource(filePath.toUri());
-
             if (!resource.exists()) {
                 return ResponseEntity.notFound().build();
             }
 
-            // 3. Отправляем файл в браузер как аудиопоток
             return ResponseEntity.ok()
                     .contentType(MediaType.parseMediaType("audio/webm"))
                     .header(HttpHeaders.CONTENT_DISPOSITION, "inline; filename=\"" + resource.getFilename() + "\"")
                     .body(resource);
 
         } catch (Exception e) {
-            System.err.println("Ошибка воспроизведения: " + e.getMessage());
+            System.err.println("Помилка відтворення: " + e.getMessage());
             return ResponseEntity.internalServerError().build();
         }
     }
@@ -110,39 +128,40 @@ public class AudioController {
     @GetMapping("/history")
     public ResponseEntity<?> getUserHistory(@RequestParam String email) {
         try {
-            // Ищем все записи пользователя, отсортированные по дате
             List<VoiceRecord> records = voiceRecordRepository.findByUserEmailOrderByCreatedAtDesc(email);
             return ResponseEntity.ok(records);
         } catch (Exception e) {
-            return ResponseEntity.internalServerError().body(Map.of("message", "Ошибка получения истории: " + e.getMessage()));
+            return ResponseEntity.internalServerError().body(Map.of("message", "Помилка отримання історії: " + e.getMessage()));
         }
     }
 
-    // === МЕТОД ДЛЯ УДАЛЕНИЯ ЗАПИСИ ===
     @DeleteMapping("/delete/{id}")
     public ResponseEntity<?> deleteAudio(@PathVariable Long id) {
         try {
-            // 1. Находим запись в базе данных
             VoiceRecord record = voiceRecordRepository.findById(id)
                     .orElseThrow(() -> new RuntimeException("Запис не знайдено"));
 
-            // 2. Находим физический файл на диске и удаляем его
-            Path filePath = Paths.get(record.getFilePath());
-            Files.deleteIfExists(filePath);
+            if (record.getCloudinaryPublicId() != null) {
+                cloudinary.uploader().destroy(
+                        record.getCloudinaryPublicId(),
+                        ObjectUtils.asMap("resource_type", "video")
+                );
+            } else if (!record.getFilePath().startsWith("http://") && !record.getFilePath().startsWith("https://")) {
+                Files.deleteIfExists(Paths.get(record.getFilePath()));
+            }
 
-            // 3. Удаляем строку с метаданными из базы (PostgreSQL)
             voiceRecordRepository.delete(record);
 
             return ResponseEntity.ok(Map.of(
-                "status", "success", 
-                "message", "Запис успішно видалено"
+                    "status", "success",
+                    "message", "Запис успішно видалено"
             ));
 
         } catch (Exception e) {
             System.err.println("Помилка видалення: " + e.getMessage());
             return ResponseEntity.internalServerError().body(Map.of(
-                "status", "error", 
-                "message", e.getMessage()
+                    "status", "error",
+                    "message", e.getMessage()
             ));
         }
     }
