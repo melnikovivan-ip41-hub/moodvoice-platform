@@ -1562,3 +1562,257 @@
             color: #f3f4f6;
             border: 1px solid rgba(255, 255, 255, 0.12);
         }
+
+        /* ===== ГРАФІК ДИНАМІКИ ТА ФІЛЬТРИ ІСТОРІЇ ===== */
+        .chart-card {
+            background: var(--bg-card);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 18px;
+            margin-bottom: 24px;
+        }
+
+        .chart-subtitle {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .chart-wrapper {
+            position: relative;
+            height: 220px;
+            width: 100%;
+        }
+
+        .chart-empty-msg {
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 14px;
+            padding: 24px 10px;
+        }
+
+        .history-filters {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 16px;
+        }
+
+        .filter-search-input {
+            width: 100%;
+            padding: 11px 14px;
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            background: var(--bg-card);
+            color: var(--text-primary, #fff);
+            font-size: 14px;
+            outline: none;
+            box-sizing: border-box;
+        }
+
+        .filter-search-input:focus {
+            border-color: var(--brand-purple, #8b5cf6);
+        }
+
+        .filter-chips {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+        }
+
+        .filter-chip {
+            padding: 6px 14px;
+            border-radius: 999px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            background: rgba(255, 255, 255, 0.04);
+            color: var(--text-secondary);
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .filter-chip:hover {
+            border-color: rgba(168, 85, 247, 0.5);
+            color: #fff;
+        }
+
+        .filter-chip.active {
+            background: var(--brand-gradient);
+            border-color: transparent;
+            color: #fff;
+            font-weight: 600;
+        }
+
+        /* ===== ПРОФІЛЬ ТА DANGER ZONE ===== */
+        .profile-card {
+            background: var(--bg-card);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 16px;
+            padding: 18px;
+            margin-bottom: 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .profile-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+        }
+
+        .profile-row:last-child {
+            padding-bottom: 0;
+            border-bottom: none;
+        }
+
+        .profile-label {
+            color: var(--text-secondary);
+            font-size: 14px;
+        }
+
+        .role-badge {
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+            background: rgba(139, 92, 246, 0.18);
+            color: #c4b5fd;
+        }
+
+        .role-badge.admin {
+            background: rgba(249, 115, 22, 0.2);
+            color: #fdba74;
+        }
+
+        .profile-actions {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 24px;
+        }
+
+        .danger-zone-card {
+            background: rgba(239, 68, 68, 0.07);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            border-radius: 16px;
+            padding: 18px;
+        }
+
+        .danger-zone-title {
+            color: #fca5a5;
+            margin: 0 0 8px 0;
+            font-size: 16px;
+        }
+
+        .danger-zone-desc {
+            color: var(--text-secondary);
+            font-size: 13px;
+            line-height: 1.5;
+            margin: 0 0 16px 0;
+        }
+
+        .btn-danger-outline {
+            background: rgba(239, 68, 68, 0.15);
+            border: 1px solid rgba(239, 68, 68, 0.5);
+            color: #fca5a5;
+        }
+
+        .btn-danger-outline:hover {
+            background: var(--color-danger, #ef4444);
+            color: #fff;
+        }
+
+        /* ===== АДМІН-ПАНЕЛЬ ===== */
+        .admin-metrics-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        @media (min-width: 600px) {
+            .admin-metrics-grid {
+                grid-template-columns: repeat(4, 1fr);
+            }
+        }
+
+        .admin-users-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-bottom: 24px;
+        }
+
+        .admin-user-card {
+            background: var(--bg-card);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 14px;
+            padding: 14px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+
+        .admin-user-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .admin-user-email {
+            font-weight: 600;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .admin-user-meta {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .status-badge-blocked {
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: 11px;
+            background: rgba(239, 68, 68, 0.2);
+            color: #fca5a5;
+        }
+
+        .admin-block-btn {
+            padding: 8px 14px;
+            border-radius: 10px;
+            border: 1px solid rgba(255, 255, 255, 0.14);
+            background: rgba(255, 255, 255, 0.06);
+            color: #fff;
+            font-size: 13px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .admin-block-btn.block {
+            border-color: rgba(239, 68, 68, 0.45);
+            color: #fca5a5;
+        }
+
+        .admin-block-btn.block:hover {
+            background: var(--color-danger, #ef4444);
+            color: #fff;
+        }
+
+        .admin-block-btn.unblock {
+            border-color: rgba(16, 185, 129, 0.45);
+            color: #6ee7b7;
+        }
+
+        .admin-block-btn.unblock:hover {
+            background: #10b981;
+            color: #fff;
+        }

@@ -11,6 +11,39 @@ const API_BASE_URL = (window.location.hostname === "localhost" || window.locatio
 
 let userHistoryRecords = [];
 
+// ===== JWT-АВТОРИЗАЦІЯ =====
+function getAuthToken() {
+    return localStorage.getItem('authToken');
+}
+
+function getAuthHeaders(extra = {}) {
+    const token = getAuthToken();
+    return token ? { ...extra, Authorization: `Bearer ${token}` } : { ...extra };
+}
+
+function clearAuthSession() {
+    localStorage.removeItem('authToken');
+    localStorage.removeItem('userEmail');
+    localStorage.removeItem('userRole');
+    userHistoryRecords = [];
+}
+
+function handleUnauthorized(response) {
+    if (response.status === 401 || response.status === 403) {
+        clearAuthSession();
+        showNotification("Сесія завершилась або немає доступу. Увійдіть знову.", "error");
+        showScreen('login-screen');
+        return true;
+    }
+    return false;
+}
+
+function logout() {
+    clearAuthSession();
+    showNotification("Ви вийшли з акаунту", "success");
+    showScreen('landing-screen');
+}
+
 // ===== ДОПОМІЖНІ ФУНКЦІЇ =====
 function escapeHtml(text) {
     if (!text) return "";
@@ -130,6 +163,16 @@ function showNotification(message, type = 'error') {
 
 // ===== НАВІГАЦІЯ =====
 function showScreen(screenId) {
+    const protectedScreens = ['dashboard-screen', 'recording-screen', 'analytics-screen', 'support-screen', 'profile-screen', 'admin-screen'];
+    if (protectedScreens.includes(screenId) && !getAuthToken()) {
+        screenId = 'login-screen';
+    }
+
+    if (screenId === 'admin-screen' && localStorage.getItem('userRole') !== 'ADMIN') {
+        showNotification("Доступ лише для адміністратора.", "error");
+        screenId = 'dashboard-screen';
+    }
+
     document.querySelectorAll('.screen').forEach(screen => {
         screen.classList.remove('active');
     });
@@ -144,7 +187,12 @@ function showScreen(screenId) {
     }
 
     if (screenId === 'dashboard-screen') {
+        updateRoleUI();
         loadUserHistory();
+    } else if (screenId === 'profile-screen') {
+        loadProfile();
+    } else if (screenId === 'admin-screen') {
+        loadAdminPanel();
     }
 
     const player = document.querySelector('#custom-audio-player audio');
@@ -178,14 +226,18 @@ async function handleLogin(event) {
             body: JSON.stringify({ email: emailValue, password: passwordValue })
         });
 
-        if (response.ok) {
-            localStorage.setItem('userEmail', emailValue);
+        const data = await response.json().catch(() => ({}));
+
+        if (response.ok && data.token) {
+            localStorage.setItem('authToken', data.token);
+            localStorage.setItem('userEmail', data.email || emailValue);
+            localStorage.setItem('userRole', data.role || 'USER');
             showNotification("Вхід успішний!", "success");
             showScreen('dashboard-screen');
             document.getElementById('login-email').value = '';
             document.getElementById('login-password').value = '';
         } else {
-            showNotification("Неправильний email або пароль.", "error");
+            showNotification(data.message || "Неправильний email або пароль.", "error");
         }
     } catch (error) {
         console.error("Сервер недоступний:", error);
@@ -229,14 +281,16 @@ async function handleRegister(event) {
 
         const data = await response.json();
 
-        if (data.status === "success") {
-            localStorage.setItem('userEmail', emailValue);
+        if (response.ok && data.status === "success" && data.token) {
+            localStorage.setItem('authToken', data.token);
+            localStorage.setItem('userEmail', data.email || emailValue);
+            localStorage.setItem('userRole', data.role || 'USER');
             showNotification("Реєстрація успішна!", "success");
             showScreen('dashboard-screen');
             document.getElementById('register-email').value = '';
             document.getElementById('register-password').value = '';
         } else {
-            showNotification(data.message, "error");
+            showNotification(data.message || "Помилка реєстрації.", "error");
         }
     } catch (error) {
         console.error("Сервер недоступний:", error);
@@ -335,20 +389,23 @@ function toggleMusic(btn) {
 
 // ===== ЛОГІКА ІСТОРІЇ ЗАПИСІВ =====
 async function loadUserHistory() {
-    const savedEmail = localStorage.getItem('userEmail');
-    if (!savedEmail) return;
+    if (!getAuthToken()) {
+        showScreen('login-screen');
+        return;
+    }
 
     const historyList = document.querySelector('.history-list');
     if (!historyList) return;
 
     try {
-        const response = await fetch(`${API_BASE_URL}/api/audio/history?email=${encodeURIComponent(savedEmail)}`);
+        const response = await fetch(`${API_BASE_URL}/api/audio/history`, {
+            headers: getAuthHeaders()
+        });
+        if (handleUnauthorized(response)) return;
         if (!response.ok) throw new Error('Помилка завантаження історії');
 
         userHistoryRecords = await response.json();
-        historyList.innerHTML = '';
 
-        // Оновлюємо реальну статистику на дашборді
         const totalEl = document.querySelector('[data-testid="stat-records"] .stat-number');
         const streakEl = document.querySelector('[data-testid="stat-streak"] .stat-number');
         const weekEl = document.querySelector('[data-testid="stat-minutes"] .stat-number');
@@ -362,50 +419,8 @@ async function loadUserHistory() {
         if (weekEl) weekEl.textContent = lastWeekCount;
         if (weekLabel) weekLabel.textContent = "За 7 днів";
 
-        if (userHistoryRecords.length === 0) {
-            historyList.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 20px;">У вас поки немає записів. Створіть перший!</p>';
-            return;
-        }
-
-        userHistoryRecords.forEach((record, index) => {
-            const dateObj = new Date(record.createdAt);
-            const dateStr = dateObj.toLocaleDateString('uk-UA', { day: 'numeric', month: 'long', year: 'numeric' });
-            const timeStr = dateObj.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
-            const meta = getMoodMeta(record.moodType, record.crisisDetected);
-
-            const rawText = (record.transcription || "").trim();
-            const previewText = rawText.length > 110
-                ? escapeHtml(rawText.slice(0, 110)) + "..."
-                : escapeHtml(rawText || "Натисніть, щоб відкрити аналітику та прослухати");
-
-            const recordHtml = `
-                <div class="history-item" onclick="openAnalytics(${index})">
-                    <div class="history-header">
-                        <div class="history-meta">
-                            <div class="history-date">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
-                                    <line x1="16" y1="2" x2="16" y2="6"/>
-                                    <line x1="8" y1="2" x2="8" y2="6"/>
-                                    <line x1="3" y1="10" x2="21" y2="10"/>
-                                </svg>
-                                ${dateStr}
-                            </div>
-                            <div class="history-time">
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <circle cx="12" cy="12" r="10"/>
-                                    <polyline points="12,6 12,12 16,14"/>
-                                </svg>
-                                ${timeStr}
-                            </div>
-                        </div>
-                        <span class="mood-tag ${meta.tagClass}">${escapeHtml(meta.label)}</span>
-                    </div>
-                    <p class="history-preview">${previewText}</p>
-                </div>
-            `;
-            historyList.insertAdjacentHTML('beforeend', recordHtml);
-        });
+        renderMoodChart(userHistoryRecords);
+        applyHistoryFilters();
     } catch (error) {
         console.error(error);
         showNotification("Не вдалося завантажити історію записів", "error");
@@ -436,6 +451,7 @@ function openAnalytics(indexOrRecord) {
     const dateObj = new Date(record.createdAt);
     const dateStr = dateObj.toLocaleDateString('uk-UA', { day: 'numeric', month: 'long', year: 'numeric' });
     const timeStr = dateObj.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+    
 
     document.querySelector('.analytics-date').innerHTML = `
         <span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> ${dateStr}</span>
@@ -486,9 +502,10 @@ function openAnalytics(indexOrRecord) {
     const oldPlayer = document.getElementById('custom-audio-player');
     if (oldPlayer) oldPlayer.remove();
 
+    const encodedToken = encodeURIComponent(getAuthToken() || "");
     const playerHtml = `
         <div id="custom-audio-player" class="sleek-player">
-            <audio id="real-audio" src="${record.filePath}" preload="metadata" style="display: none;"></audio>
+            <audio id="real-audio" src="${API_BASE_URL}/api/audio/play/${record.id}?token=${encodedToken}" preload="metadata" style="display: none;"></audio>
 
             <button id="play-pause-btn" class="sleek-play-btn">
                 <svg id="icon-play" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
@@ -680,15 +697,14 @@ async function saveRecording() {
     const formData = new FormData();
     formData.append("file", audioBlob, "record.webm");
 
-    const savedEmail = localStorage.getItem('userEmail') || "testuser@kpi.ua";
-    formData.append("email", savedEmail);
-
     try {
         const response = await fetch(`${API_BASE_URL}/api/audio/upload`, {
             method: "POST",
+            headers: getAuthHeaders(),
             body: formData
         });
 
+        if (handleUnauthorized(response)) return;
         const data = await response.json();
 
         if (response.ok && data.status === "success") {
@@ -716,14 +732,17 @@ async function saveRecording() {
 }
 
 // ===== КАСТОМНЕ ВІКНО ПІДТВЕРДЖЕННЯ =====
-function showCustomConfirm(message) {
+function showCustomConfirm(message, title = "Видалити запис?", confirmLabel = "Видалити") {
     return new Promise((resolve) => {
         const overlay = document.getElementById('custom-confirm-overlay');
+        const titleEl = overlay.querySelector('.confirm-title');
         const msgEl = document.getElementById('confirm-message');
         const btnYes = document.getElementById('confirm-yes-btn');
         const btnCancel = document.getElementById('confirm-cancel-btn');
 
+        if (titleEl) titleEl.textContent = title;
         msgEl.textContent = message;
+        btnYes.textContent = confirmLabel;
         overlay.classList.add('show');
 
         const cleanup = () => {
@@ -746,9 +765,11 @@ async function deleteRecord(recordId) {
 
     try {
         const response = await fetch(`${API_BASE_URL}/api/audio/delete/${recordId}`, {
-            method: "DELETE"
+            method: "DELETE",
+            headers: getAuthHeaders()
         });
 
+        if (handleUnauthorized(response)) return;
         const data = await response.json();
 
         if (response.ok && data.status === "success") {
@@ -802,3 +823,384 @@ document.addEventListener('DOMContentLoaded', () => {
         bar.style.animationDuration = `${duration}s`;
     });
 });
+
+// ===== ФІЛЬТРИ ІСТОРІЇ ТА ГРАФІК CHART.JS =====
+let activeMoodFilter = 'all';
+let moodChartInstance = null;
+
+function getRecordMoodKey(record) {
+    const normalized = (record.moodType || "").toLowerCase();
+    if (normalized.includes("рад") || normalized.includes("joy")) return 'joy';
+    if (normalized.includes("стрес") || normalized.includes("трив") || normalized.includes("stress")) return 'stress';
+    if (normalized.includes("смут") || normalized.includes("сум") || normalized.includes("sad")) return 'sadness';
+    return 'calm';
+}
+
+function setMoodFilter(moodKey, btnEl) {
+    activeMoodFilter = moodKey;
+    document.querySelectorAll('#mood-filter-chips .filter-chip').forEach(c => c.classList.remove('active'));
+    if (btnEl) btnEl.classList.add('active');
+    applyHistoryFilters();
+}
+
+function resetHistoryFilters(event) {
+    if (event) event.preventDefault();
+    activeMoodFilter = 'all';
+    const searchInput = document.getElementById('history-search-input');
+    if (searchInput) searchInput.value = '';
+    document.querySelectorAll('#mood-filter-chips .filter-chip').forEach(c => {
+        c.classList.toggle('active', c.dataset.mood === 'all');
+    });
+    applyHistoryFilters();
+}
+
+function applyHistoryFilters() {
+    const historyList = document.querySelector('.history-list');
+    if (!historyList) return;
+
+    const searchInput = document.getElementById('history-search-input');
+    const query = searchInput ? searchInput.value.trim().toLowerCase() : '';
+
+    const filtered = userHistoryRecords.filter(record => {
+        const moodMatch = activeMoodFilter === 'all' || getRecordMoodKey(record) === activeMoodFilter;
+        const textMatch = !query || (record.transcription || '').toLowerCase().includes(query);
+        return moodMatch && textMatch;
+    });
+
+    historyList.innerHTML = '';
+
+    if (userHistoryRecords.length === 0) {
+        historyList.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 20px;">У вас поки немає записів. Створіть перший!</p>';
+        return;
+    }
+
+    if (filtered.length === 0) {
+        historyList.innerHTML = '<p style="text-align: center; color: var(--text-secondary); padding: 20px;">За обраним фільтром записів не знайдено.</p>';
+        return;
+    }
+
+    filtered.forEach(record => {
+        const origIndex = userHistoryRecords.indexOf(record);
+        const dateObj = new Date(record.createdAt);
+        const dateStr = dateObj.toLocaleDateString('uk-UA', { day: 'numeric', month: 'long', year: 'numeric' });
+        const timeStr = dateObj.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+        const meta = getMoodMeta(record.moodType, record.crisisDetected);
+
+        const rawText = (record.transcription || "").trim();
+        const previewText = rawText.length > 110
+            ? escapeHtml(rawText.slice(0, 110)) + "..."
+            : escapeHtml(rawText || "Натисніть, щоб відкрити аналітику та прослухати");
+
+        const recordHtml = `
+            <div class="history-item" onclick="openAnalytics(${origIndex})">
+                <div class="history-header">
+                    <div class="history-meta">
+                        <div class="history-date">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                                <line x1="16" y1="2" x2="16" y2="6"/>
+                                <line x1="8" y1="2" x2="8" y2="6"/>
+                                <line x1="3" y1="10" x2="21" y2="10"/>
+                            </svg>
+                            ${dateStr}
+                        </div>
+                        <div class="history-time">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <circle cx="12" cy="12" r="10"/>
+                                <polyline points="12,6 12,12 16,14"/>
+                            </svg>
+                            ${timeStr}
+                        </div>
+                    </div>
+                    <span class="mood-tag ${meta.tagClass}">${escapeHtml(meta.label)}</span>
+                </div>
+                <p class="history-preview">${previewText}</p>
+            </div>
+        `;
+        historyList.insertAdjacentHTML('beforeend', recordHtml);
+    });
+}
+
+function renderMoodChart(records) {
+    const canvas = document.getElementById('mood-dynamics-chart');
+    const wrapper = canvas ? canvas.parentElement : null;
+    const emptyMsg = document.getElementById('chart-empty-msg');
+    if (!canvas || typeof Chart === 'undefined') return;
+
+    const scored = records
+        .filter(r => r.calmScore != null || r.joyScore != null || r.sadnessScore != null || r.stressScore != null)
+        .slice(0, 12)
+        .reverse();
+
+    if (moodChartInstance) {
+        moodChartInstance.destroy();
+        moodChartInstance = null;
+    }
+
+    if (scored.length < 2) {
+        if (wrapper) wrapper.style.display = 'none';
+        if (emptyMsg) emptyMsg.style.display = 'block';
+        return;
+    }
+
+    if (wrapper) wrapper.style.display = 'block';
+    if (emptyMsg) emptyMsg.style.display = 'none';
+
+    const labels = scored.map(r => {
+        const d = new Date(r.createdAt);
+        return d.toLocaleDateString('uk-UA', { day: '2-digit', month: '2-digit' }) + ' ' +
+            d.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+    });
+
+    const toPct = (v) => Math.round((v || 0) * 100);
+
+    moodChartInstance = new Chart(canvas, {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [
+                {
+                    label: 'Спокій',
+                    data: scored.map(r => toPct(r.calmScore)),
+                    borderColor: '#3b82f6',
+                    backgroundColor: 'rgba(59, 130, 246, 0.12)',
+                    tension: 0.35,
+                    borderWidth: 2,
+                    pointRadius: 3
+                },
+                {
+                    label: 'Радість',
+                    data: scored.map(r => toPct(r.joyScore)),
+                    borderColor: '#10b981',
+                    backgroundColor: 'rgba(16, 185, 129, 0.12)',
+                    tension: 0.35,
+                    borderWidth: 2,
+                    pointRadius: 3
+                },
+                {
+                    label: 'Сум',
+                    data: scored.map(r => toPct(r.sadnessScore)),
+                    borderColor: '#a855f7',
+                    backgroundColor: 'rgba(168, 85, 247, 0.12)',
+                    tension: 0.35,
+                    borderWidth: 2,
+                    pointRadius: 3
+                },
+                {
+                    label: 'Стрес',
+                    data: scored.map(r => toPct(r.stressScore)),
+                    borderColor: '#f97316',
+                    backgroundColor: 'rgba(249, 115, 22, 0.12)',
+                    tension: 0.35,
+                    borderWidth: 2,
+                    pointRadius: 3
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+                legend: {
+                    position: 'bottom',
+                    labels: { color: '#9ca3af', boxWidth: 12, padding: 14 }
+                }
+            },
+            scales: {
+                x: {
+                    ticks: { color: '#9ca3af', maxRotation: 0, autoSkip: true, maxTicksLimit: 5 },
+                    grid: { color: 'rgba(255,255,255,0.05)' }
+                },
+                y: {
+                    min: 0,
+                    max: 100,
+                    ticks: { color: '#9ca3af', callback: (v) => v + '%' },
+                    grid: { color: 'rgba(255,255,255,0.05)' }
+                }
+            }
+        }
+    });
+}
+
+// ===== РОЛІ ТА ПРОФІЛЬ =====
+function updateRoleUI() {
+    const isAdmin = localStorage.getItem('userRole') === 'ADMIN';
+    const adminNavBtn = document.getElementById('admin-nav-btn');
+    const profileAdminBtn = document.getElementById('profile-admin-btn');
+    if (adminNavBtn) adminNavBtn.style.display = isAdmin ? 'inline-flex' : 'none';
+    if (profileAdminBtn) profileAdminBtn.style.display = isAdmin ? 'block' : 'none';
+}
+
+async function loadProfile() {
+    updateRoleUI();
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/auth/me`, {
+            headers: getAuthHeaders()
+        });
+        if (handleUnauthorized(response)) return;
+        if (!response.ok) return;
+
+        const data = await response.json();
+        const emailEl = document.getElementById('profile-email');
+        const roleEl = document.getElementById('profile-role');
+        const countEl = document.getElementById('profile-records-count');
+
+        if (emailEl) emailEl.textContent = data.email || localStorage.getItem('userEmail') || '—';
+        if (roleEl) {
+            roleEl.textContent = data.role || 'USER';
+            roleEl.classList.toggle('admin', data.role === 'ADMIN');
+        }
+        if (countEl) countEl.textContent = data.recordsCount ?? 0;
+    } catch (error) {
+        console.error("Помилка завантаження профілю:", error);
+    }
+}
+
+async function deleteOwnAccount() {
+    const confirmed = await showCustomConfirm(
+        "Усі ваші зашифровані записи (.enc) та акаунт будуть назавжди видалені. Продовжити?",
+        "Видалити акаунт?",
+        "Видалити назавжди"
+    );
+    if (!confirmed) return;
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/auth/account`, {
+            method: "DELETE",
+            headers: getAuthHeaders()
+        });
+        if (handleUnauthorized(response)) return;
+        const data = await response.json();
+
+        if (response.ok && data.status === "success") {
+            clearAuthSession();
+            showNotification(data.message || "Акаунт видалено", "success");
+            showScreen('landing-screen');
+        } else {
+            showNotification(data.message || "Не вдалося видалити акаунт", "error");
+        }
+    } catch (error) {
+        console.error(error);
+        showNotification("Помилка з'єднання з сервером", "error");
+    }
+}
+
+// ===== АДМІН-ПАНЕЛЬ =====
+async function loadAdminPanel() {
+    try {
+        const [metricsRes, usersRes] = await Promise.all([
+            fetch(`${API_BASE_URL}/api/admin/metrics`, { headers: getAuthHeaders() }),
+            fetch(`${API_BASE_URL}/api/admin/users`, { headers: getAuthHeaders() })
+        ]);
+
+        if (handleUnauthorized(metricsRes) || handleUnauthorized(usersRes)) return;
+
+        const metrics = await metricsRes.json();
+        const users = await usersRes.json();
+
+        document.getElementById('admin-total-users').textContent = metrics.totalUsers ?? 0;
+        document.getElementById('admin-blocked-users').textContent = metrics.blockedUsers ?? 0;
+        document.getElementById('admin-total-records').textContent = metrics.totalRecords ?? 0;
+        document.getElementById('admin-crisis-records').textContent = metrics.crisisRecords ?? 0;
+
+        renderAdminAvgEmotions(metrics.averageEmotions || {});
+        renderAdminUsersList(users);
+    } catch (error) {
+        console.error("Помилка завантаження адмінки:", error);
+        showNotification("Не вдалося завантажити дані адмін-панелі", "error");
+    }
+}
+
+function renderAdminAvgEmotions(avg) {
+    const container = document.getElementById('admin-avg-emotions');
+    if (!container) return;
+
+    const items = [
+        { key: 'calm', label: 'Спокій', color: 'var(--color-calm)' },
+        { key: 'joy', label: 'Радість', color: 'var(--color-joy)' },
+        { key: 'sadness', label: 'Сум', color: 'var(--color-harmony)' },
+        { key: 'stress', label: 'Стрес / Тривога', color: 'var(--color-stress)' }
+    ];
+
+    if (Object.keys(avg).length === 0) {
+        container.innerHTML = '<p class="chart-empty-msg">Поки немає проаналізованих записів.</p>';
+        return;
+    }
+
+    container.innerHTML = items.map(item => {
+        const pct = Math.round((avg[item.key] || 0) * 100);
+        return `
+            <div class="progress-item">
+                <div class="progress-header">
+                    <span class="progress-label">${item.label}</span>
+                    <span class="progress-value">${pct}%</span>
+                </div>
+                <div class="progress-bar">
+                    <div class="progress-fill" style="width: ${pct}%; background: ${item.color};"></div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderAdminUsersList(users) {
+    const container = document.getElementById('admin-users-list');
+    if (!container) return;
+
+    const currentEmail = (localStorage.getItem('userEmail') || '').toLowerCase();
+
+    container.innerHTML = users.map(u => {
+        const isSelf = (u.email || '').toLowerCase() === currentEmail;
+        const isAdmin = u.role === 'ADMIN';
+        const btnHtml = isSelf
+            ? '<span class="admin-user-meta">Поточний акаунт</span>'
+            : `<button class="admin-block-btn ${u.blocked ? 'unblock' : 'block'}" onclick="toggleBlockUser(${u.id}, ${!u.blocked}, '${escapeHtml(u.email)}')">
+                    ${u.blocked ? 'Розблокувати' : 'Заблокувати'}
+               </button>`;
+
+        return `
+            <div class="admin-user-card">
+                <div class="admin-user-info">
+                    <div class="admin-user-email">
+                        <span>${escapeHtml(u.email)}</span>
+                        <span class="role-badge ${isAdmin ? 'admin' : ''}">${escapeHtml(u.role)}</span>
+                        ${u.blocked ? '<span class="status-badge-blocked">Заблокований</span>' : ''}
+                    </div>
+                    <div class="admin-user-meta">Записів: ${u.recordsCount ?? 0}</div>
+                </div>
+                ${btnHtml}
+            </div>
+        `;
+    }).join('');
+}
+
+async function toggleBlockUser(userId, nextBlocked, email) {
+    const actionLabel = nextBlocked ? "Заблокувати" : "Розблокувати";
+    const confirmed = await showCustomConfirm(
+        `${actionLabel} користувача ${email}?`,
+        `${actionLabel} акаунт?`,
+        actionLabel
+    );
+    if (!confirmed) return;
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/admin/users/${userId}/block`, {
+            method: "PATCH",
+            headers: getAuthHeaders({ "Content-Type": "application/json" }),
+            body: JSON.stringify({ blocked: nextBlocked })
+        });
+        if (handleUnauthorized(response)) return;
+        const data = await response.json();
+
+        if (response.ok && data.status === "success") {
+            showNotification(data.message, "success");
+            loadAdminPanel();
+        } else {
+            showNotification(data.message || "Помилка зміни статусу", "error");
+        }
+    } catch (error) {
+        console.error(error);
+        showNotification("Сервер не відповідає", "error");
+    }
+}
