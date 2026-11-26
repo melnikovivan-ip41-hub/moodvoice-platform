@@ -68,6 +68,7 @@ public class AudioController {
                 record.setIsLowConfidence(mlResult.is_low_confidence());
                 record.setCrisisDetected(mlResult.crisis_detected());
                 record.setCrisisMessage(mlResult.crisis_message());
+                record.setMoodArtBase64(mlResult.mood_art_base64());
 
                 if (mlResult.emotions() != null) {
                     record.setCalmScore(mlResult.emotions().getOrDefault("calm", 0.0));

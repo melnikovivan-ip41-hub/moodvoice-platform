@@ -12,5 +12,6 @@ public record MlAnalysisResponse(
         Boolean is_low_confidence,
         Boolean crisis_detected,
         String crisis_message,
+        String mood_art_base64,
         Double processing_time_sec
 ) {}

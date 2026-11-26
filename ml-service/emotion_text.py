@@ -1,5 +1,5 @@
 import re
-from typing import Dict, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from transformers import pipeline
 
 MODEL_NAME = "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"
@@ -15,6 +15,12 @@ LABEL_TO_CORE = {
 CANDIDATE_LABELS = list(LABEL_TO_CORE.keys())
 HYPOTHESIS_TEMPLATE = "У цьому тексті людина відчуває {}."
 CORE_ORDER = ("calm", "joy", "sadness", "stress")
+
+# Контрастные связки: с них всегда начинаем отдельный фрагмент, чтобы NLI не зануляла предыдущую эмоцию
+CONTRAST_START_RE = re.compile(
+    r"^(?:але|проте|однак|хоча|зате|натомість|втім|та\s+все\s+ж)\b",
+    re.IGNORECASE,
+)
 
 MOOD_LABELS_UK = {
     "calm": "Спокій",
@@ -70,19 +76,42 @@ def detect_crisis(text: str) -> Tuple[bool, Optional[str]]:
     return False, None
 
 
-def analyze_text_emotions(text: str) -> Tuple[Dict[str, float], float, bool]:
-    """
-    Возвращает:
-      - словарь вероятностей по 4 классам (сумма = 1.0)
-      - confidence (уверенность в доминирующей эмоции)
-      - is_low_confidence (True, если текста нет или модель не уверена)
-    """
-    if not text or len(text.strip()) < 3:
-        return {"calm": 1.0, "joy": 0.0, "sadness": 0.0, "stress": 0.0}, 0.0, True
+def _split_into_chunks(text: str, max_chars: int = 220) -> List[str]:
+    """Разбивает длинный монолог на смысловые фрагменты с разрывом по контрастным связкам."""
+    cleaned = text.strip()
+    sentences = [
+        s.strip()
+        for s in re.split(
+            r"(?<=[.!?…])\s+|(?=\b(?:Але|Проте|Однак|Хоча|Зате|Втім)\b)",
+            cleaned,
+        )
+        if s.strip()
+    ]
+    if len(sentences) <= 1:
+        return [cleaned]
 
-    clf = get_text_classifier()
+    chunks: List[str] = []
+    current = ""
+
+    for sentence in sentences:
+        is_contrast = bool(CONTRAST_START_RE.match(sentence))
+        if not current:
+            current = sentence
+        elif is_contrast or (len(current) + 1 + len(sentence) > max_chars):
+            chunks.append(current)
+            current = sentence
+        else:
+            current = f"{current} {sentence}"
+
+    if current:
+        chunks.append(current)
+
+    return chunks
+
+
+def _score_single_chunk(clf, chunk: str) -> Tuple[Dict[str, float], float]:
     result = clf(
-        text.strip(),
+        chunk,
         candidate_labels=CANDIDATE_LABELS,
         hypothesis_template=HYPOTHESIS_TEMPLATE,
         multi_label=True,
@@ -97,10 +126,43 @@ def analyze_text_emotions(text: str) -> Tuple[Dict[str, float], float, bool]:
     raw_max = max(raw_scores.values())
     total = sum(raw_scores.values())
     if total <= 1e-6:
+        return {"calm": 1.0, "joy": 0.0, "sadness": 0.0, "stress": 0.0}, 0.0
+
+    normalized = {k: raw_scores[k] / total for k in CORE_ORDER}
+    return normalized, raw_max
+
+
+def analyze_text_emotions(text: str) -> Tuple[Dict[str, float], float, bool]:
+    """
+    Возвращает:
+      - словарь вероятностей по 4 классам (сумма = 1.0)
+      - confidence (уверенность в доминирующей эмоции)
+      - is_low_confidence (True, если текста нет или модель не уверена)
+    """
+    if not text or len(text.strip()) < 3:
         return {"calm": 1.0, "joy": 0.0, "sadness": 0.0, "stress": 0.0}, 0.0, True
 
-    normalized = {k: round(raw_scores[k] / total, 3) for k in CORE_ORDER}
+    clf = get_text_classifier()
+    chunks = _split_into_chunks(text)
+
+    weighted_sum = {k: 0.0 for k in CORE_ORDER}
+    total_weight = 0.0
+    max_raw_peak = 0.0
+
+    for chunk in chunks:
+        chunk_probs, chunk_peak = _score_single_chunk(clf, chunk)
+        weight = float(max(len(chunk), 1))
+        for k in CORE_ORDER:
+            weighted_sum[k] += chunk_probs[k] * weight
+        total_weight += weight
+        if chunk_peak > max_raw_peak:
+            max_raw_peak = chunk_peak
+
+    if total_weight <= 1e-6:
+        return {"calm": 1.0, "joy": 0.0, "sadness": 0.0, "stress": 0.0}, 0.0, True
+
+    normalized = {k: round(weighted_sum[k] / total_weight, 3) for k in CORE_ORDER}
     confidence = round(max(normalized.values()), 2)
-    is_low_confidence = (confidence < 0.40) or (raw_max < 0.35)
+    is_low_confidence = (confidence < 0.40) or (max_raw_peak < 0.35)
 
     return normalized, confidence, is_low_confidence

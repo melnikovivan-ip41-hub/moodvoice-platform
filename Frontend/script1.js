@@ -461,7 +461,21 @@ function openAnalytics(indexOrRecord) {
     const artSection = document.querySelector('.mood-art');
     const artBadge = document.getElementById('mood-art-badge');
     if (artSection) {
-        artSection.style.background = meta.gradient;
+        const oldArtImg = document.getElementById('mood-art-img');
+        if (oldArtImg) oldArtImg.remove();
+
+        if (record.moodArtBase64) {
+            artSection.style.background = "var(--bg-card)";
+            const img = document.createElement('img');
+            img.id = 'mood-art-img';
+            img.className = 'mood-art-img';
+            img.src = record.moodArtBase64;
+            img.alt = `Арт настрою: ${meta.label}`;
+            artSection.prepend(img);
+        } else {
+            // Fallback-градієнт для старих записів без згенерованого арту
+            artSection.style.background = meta.gradient;
+        }
     }
     if (artBadge) {
         const confPct = record.confidence != null ? Math.round(record.confidence * 100) : null;
@@ -546,10 +560,25 @@ function openAnalytics(indexOrRecord) {
         progressFill.style.width = '0%';
     };
 
-    // 4. Кнопка видалення
+    // 4. Кнопка видалення та збереження арту
     const deleteBtn = document.querySelector('[data-testid="delete-btn"]');
     if (deleteBtn) {
         deleteBtn.onclick = () => deleteRecord(record.id);
+    }
+
+    const shareBtn = document.querySelector('[data-testid="share-btn"]');
+    if (shareBtn) {
+        shareBtn.onclick = () => {
+            if (!record.moodArtBase64) {
+                showNotification("Арт доступний лише для нових записів.", "error");
+                return;
+            }
+            const link = document.createElement('a');
+            link.href = record.moodArtBase64;
+            link.download = `moodvoice-art-${record.id || Date.now()}.jpg`;
+            link.click();
+            showNotification("Арт настрою збережено!", "success");
+        };
     }
 
     // 5. Транскрипція

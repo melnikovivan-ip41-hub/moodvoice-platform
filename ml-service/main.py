@@ -2,12 +2,11 @@ import os
 import time
 from contextlib import asynccontextmanager
 from typing import Dict, Optional
-
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, UploadFile
 from openai import OpenAI
 from pydantic import BaseModel
-
+from mood_art import generate_mood_art_base64, generate_mood_art_png_bytes
 from emotion_audio import CORE_CLASSES, analyze_audio_emotions, load_audio_model
 from emotion_text import (
     MOOD_LABELS_UK,
@@ -54,22 +53,25 @@ def fuse_emotions(
     audio_emotions: Optional[Dict[str, float]],
     has_text: bool,
 ) -> Dict[str, float]:
-    """Адаптивный Late Fusion: учитывает конфликт между ровной речью и эмоциональным текстом."""
+    """Адаптивный Late Fusion: компенсирует domain gap актёрских датасетов RAVDESS/TESS."""
     if audio_emotions is None:
         return text_emotions
     if not has_text:
         return audio_emotions
 
+    text_pos = text_emotions.get("calm", 0.0) + text_emotions.get("joy", 0.0)
+    audio_pos = audio_emotions.get("calm", 0.0) + audio_emotions.get("joy", 0.0)
     text_non_calm = 1.0 - text_emotions.get("calm", 0.0)
     audio_calm = audio_emotions.get("calm", 0.0)
+    audio_high_arousal = audio_emotions.get("joy", 0.0) + audio_emotions.get("stress", 0.0)
 
-    # Если человек говорит ровным тоном (audio -> calm), но слова явно эмоциональные,
-    # отдаём приоритет тексту (компенсируем domain gap актёрских датасетов RAVDESS/TESS).
-    if audio_calm >= 0.55 and text_non_calm >= 0.55:
+    # 1. Конфликт полярности (например, текст позитивный, а тихий голос аудио приняло за sadness)
+    # или ровный тон при явно эмоциональном тексте -> доверяем в основном тексту
+    if (text_pos >= 0.55 and audio_pos < 0.45) or (audio_calm >= 0.55 and text_non_calm >= 0.55):
         w_text, w_audio = 0.85, 0.15
-    elif audio_calm < 0.45:
-        # Интонация явно выразительная — возвращаем аудио полный вес
-        w_text, w_audio = 0.65, 0.35
+    # 2. Высокая энергия в голосе (явная радость или явный стресс) -> усиливаем вклад аудио
+    elif audio_high_arousal >= 0.55:
+        w_text, w_audio = 0.68, 0.32
     else:
         w_text, w_audio = TEXT_WEIGHT, AUDIO_WEIGHT
 
@@ -94,6 +96,7 @@ class AnalysisResponse(BaseModel):
     is_low_confidence: bool
     crisis_detected: bool
     crisis_message: Optional[str] = None
+    mood_art_base64: Optional[str] = None
     processing_time_sec: float
 
 
@@ -154,7 +157,13 @@ async def analyze_audio(file: UploadFile = File(...)):
     overall_mood = MOOD_LABELS_UK[dominant_key]
 
     confidence = round(max(fused_emotions.values()), 2)
-    is_low_confidence = (confidence < 0.45) or (not has_text and audio_emotions is None) or (text_low_conf and audio_emotions is None)
+    is_low_confidence = (confidence < 0.38) or (not has_text and audio_emotions is None) or (text_low_conf and audio_emotions is None)
+
+    mood_art_base64 = generate_mood_art_base64(
+        fused_emotions,
+        seed_text=transcript_text,
+        crisis_detected=crisis_detected,
+    )
 
     elapsed = round(time.time() - start_time, 2)
     return AnalysisResponse(
@@ -167,5 +176,24 @@ async def analyze_audio(file: UploadFile = File(...)):
         is_low_confidence=is_low_confidence,
         crisis_detected=crisis_detected,
         crisis_message=crisis_message,
+        mood_art_base64=mood_art_base64,
         processing_time_sec=elapsed,
     )
+
+class ArtPreviewRequest(BaseModel):
+    calm: float = 0.65
+    joy: float = 0.20
+    sadness: float = 0.10
+    stress: float = 0.05
+    seed_text: str = "demo"
+    crisis_detected: bool = False
+
+
+@app.post("/generate-art", responses={200: {"content": {"image/png": {}}}})
+def generate_art_preview(req: ArtPreviewRequest):
+    png_bytes = generate_mood_art_png_bytes(
+        {"calm": req.calm, "joy": req.joy, "sadness": req.sadness, "stress": req.stress},
+        seed_text=req.seed_text,
+        crisis_detected=req.crisis_detected,
+    )
+    return Response(content=png_bytes, media_type="image/png")

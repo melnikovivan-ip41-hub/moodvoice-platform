@@ -36,6 +36,9 @@ public class VoiceRecord {
     @Column(columnDefinition = "TEXT")
     private String crisisMessage;
 
+    @Column(columnDefinition = "TEXT")
+    private String moodArtBase64;
+
     private LocalDateTime createdAt;
     private Long fileSize;
 
@@ -75,6 +78,8 @@ public class VoiceRecord {
     public void setCrisisDetected(Boolean crisisDetected) { this.crisisDetected = crisisDetected; }
     public String getCrisisMessage() { return crisisMessage; }
     public void setCrisisMessage(String crisisMessage) { this.crisisMessage = crisisMessage; }
+    public String getMoodArtBase64() { return moodArtBase64; }
+    public void setMoodArtBase64(String moodArtBase64) { this.moodArtBase64 = moodArtBase64; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public Long getFileSize() { return fileSize; }
 }
