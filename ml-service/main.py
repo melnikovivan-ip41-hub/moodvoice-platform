@@ -19,8 +19,8 @@ from emotion_text import (
 load_dotenv()
 
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "whisper-large-v3")
-TEXT_WEIGHT = 0.65
-AUDIO_WEIGHT = 0.35
+TEXT_WEIGHT = 0.72
+AUDIO_WEIGHT = 0.28
 
 
 @asynccontextmanager
@@ -54,15 +54,27 @@ def fuse_emotions(
     audio_emotions: Optional[Dict[str, float]],
     has_text: bool,
 ) -> Dict[str, float]:
-    """Late Fusion: объединение вероятностей текстовой (65%) и акустической (35%) моделей."""
+    """Адаптивный Late Fusion: учитывает конфликт между ровной речью и эмоциональным текстом."""
     if audio_emotions is None:
         return text_emotions
     if not has_text:
         return audio_emotions
 
+    text_non_calm = 1.0 - text_emotions.get("calm", 0.0)
+    audio_calm = audio_emotions.get("calm", 0.0)
+
+    # Если человек говорит ровным тоном (audio -> calm), но слова явно эмоциональные,
+    # отдаём приоритет тексту (компенсируем domain gap актёрских датасетов RAVDESS/TESS).
+    if audio_calm >= 0.55 and text_non_calm >= 0.55:
+        w_text, w_audio = 0.85, 0.15
+    elif audio_calm < 0.45:
+        # Интонация явно выразительная — возвращаем аудио полный вес
+        w_text, w_audio = 0.65, 0.35
+    else:
+        w_text, w_audio = TEXT_WEIGHT, AUDIO_WEIGHT
+
     raw = {
-        cls: TEXT_WEIGHT * text_emotions.get(cls, 0.0)
-        + AUDIO_WEIGHT * audio_emotions.get(cls, 0.0)
+        cls: w_text * text_emotions.get(cls, 0.0) + w_audio * audio_emotions.get(cls, 0.0)
         for cls in CORE_CLASSES
     }
     total = sum(raw.values())

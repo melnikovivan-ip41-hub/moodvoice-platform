@@ -449,68 +449,85 @@
                         <line x1="8" y1="2" x2="8" y2="6"/>
                         <line x1="3" y1="10" x2="21" y2="10"/>
                     </svg>
-                    31 Березня 2026
-                </span>
-                <span>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10"/>
-                        <polyline points="12,6 12,12 16,14"/>
-                    </svg>
-                    22:15 • 3:24
+                    —
                 </span>
             </div>
 
-            <div class="mood-art" data-testid="mood-art">
-                <span class="mood-art-badge">AI-генерація настрою</span>
+            <!-- БАНЕР КРИЗОВОЇ ПІДТРИМКИ (показується лише коли crisisDetected === true) -->
+            <div id="crisis-banner" class="crisis-banner" style="display: none;">
+                <div class="crisis-banner-header">
+                    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+                        <line x1="12" y1="9" x2="12" y2="13"/>
+                        <line x1="12" y1="17" x2="12.01" y2="17"/>
+                    </svg>
+                    <h4>Ви не самі — підтримка поруч</h4>
+                </div>
+                <p id="crisis-banner-text" class="crisis-banner-text"></p>
+                <div class="crisis-hotlines">
+                    <span><strong>7333</strong> — Lifeline Ukraine (24/7, безкоштовно)</span>
+                    <span><strong>0 800 500 335</strong> — Національна гаряча лінія</span>
+                </div>
+            </div>
+
+            <div class="mood-art" data-testid="mood-art" id="mood-art-box">
+                <span class="mood-art-badge" id="mood-art-badge">AI-аналіз настрою</span>
             </div>
 
             <section class="transcription-section">
                 <h3 class="section-title" style="margin-bottom: 12px;">Транскрипція</h3>
                 <div class="transcription-card" data-testid="transcription-text">
-                    Сьогодні був довгий день, але я відчуваю спокій. Вдалося завершити важливий проєкт на роботі, і це дає відчуття задоволення. Хоча були моменти стресу, зараз я почуваюся врівноваженим. Хочу більше таких днів, коли всередині панує гармонія.
+                    Завантаження транскрипції...
                 </div>
             </section>
 
             <section class="emotions-section">
-                <h3 class="section-title" style="margin-bottom: 16px;">Аналіз емоцій</h3>
-                
+                <div class="section-header" style="margin-bottom: 16px;">
+                    <h3 class="section-title">Аналіз емоцій</h3>
+                    <span id="confidence-badge" class="confidence-badge"></span>
+                </div>
+
+                <div id="low-confidence-note" class="low-confidence-note" style="display: none;">
+                    Низька впевненість моделі — запис міг бути занадто коротким, тихим або зі змішаними емоціями.
+                </div>
+
                 <div class="progress-item" data-testid="emotion-calm">
                     <div class="progress-header">
                         <span class="progress-label">Спокій</span>
-                        <span class="progress-value">75%</span>
+                        <span class="progress-value">0%</span>
                     </div>
                     <div class="progress-bar">
-                        <div class="progress-fill" style="width: 75%; background: var(--color-calm);"></div>
+                        <div class="progress-fill" style="width: 0%; background: var(--color-calm);"></div>
                     </div>
                 </div>
 
                 <div class="progress-item" data-testid="emotion-joy">
                     <div class="progress-header">
-                        <span class="progress-label">Задоволення</span>
-                        <span class="progress-value">65%</span>
+                        <span class="progress-label">Радість</span>
+                        <span class="progress-value">0%</span>
                     </div>
                     <div class="progress-bar">
-                        <div class="progress-fill" style="width: 65%; background: var(--color-joy);"></div>
+                        <div class="progress-fill" style="width: 0%; background: var(--color-joy);"></div>
+                    </div>
+                </div>
+
+                <div class="progress-item" data-testid="emotion-sadness">
+                    <div class="progress-header">
+                        <span class="progress-label">Сум</span>
+                        <span class="progress-value">0%</span>
+                    </div>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: 0%; background: var(--color-harmony);"></div>
                     </div>
                 </div>
 
                 <div class="progress-item" data-testid="emotion-stress">
                     <div class="progress-header">
-                        <span class="progress-label">Стрес</span>
-                        <span class="progress-value">30%</span>
+                        <span class="progress-label">Стрес / Тривога</span>
+                        <span class="progress-value">0%</span>
                     </div>
                     <div class="progress-bar">
-                        <div class="progress-fill" style="width: 30%; background: var(--color-stress);"></div>
-                    </div>
-                </div>
-
-                <div class="progress-item" data-testid="emotion-harmony">
-                    <div class="progress-header">
-                        <span class="progress-label">Гармонія</span>
-                        <span class="progress-value">70%</span>
-                    </div>
-                    <div class="progress-bar">
-                        <div class="progress-fill" style="width: 70%; background: var(--color-harmony);"></div>
+                        <div class="progress-fill" style="width: 0%; background: var(--color-stress);"></div>
                     </div>
                 </div>
             </section>
@@ -518,12 +535,8 @@
             <section class="reflection-section">
                 <h3 class="section-title" style="margin-bottom: 12px;">AI-рефлексія</h3>
                 <div class="reflection-card" data-testid="ai-reflection">
-                    <p class="reflection-text">Ваш емоційний стан сьогодні збалансований. Ви пережили продуктивний день із моментами стресу, але загалом зберігаєте внутрішній спокій. Рекомендується продовжувати практики, які допомагають вам знаходити гармонію після напружених моментів.</p>
-                    <div class="reflection-tags">
-                        <span class="mood-tag tag-calm">Спокій</span>
-                        <span class="mood-tag tag-joy">Продуктивність</span>
-                        <span class="mood-tag tag-harmony">Гармонія</span>
-                    </div>
+                    <p class="reflection-text" id="reflection-text">Аналізуємо ваш стан...</p>
+                    <div class="reflection-tags"></div>
                 </div>
             </section>
 
