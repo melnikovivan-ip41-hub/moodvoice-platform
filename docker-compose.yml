@@ -1,0 +1,70 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: moodvoice-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: moodvoice_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    ports:
+      - "5435:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d moodvoice_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ml-service:
+    build: ./ml-service
+    container_name: moodvoice-ml
+    restart: unless-stopped
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.groq.com/openai/v1}
+      WHISPER_MODEL: ${WHISPER_MODEL:-whisper-large-v3}
+    ports:
+      - "8000:8000"
+    volumes:
+      - hf_cache:/root/.cache/huggingface
+
+  backend:
+    build: ./Backend
+    container_name: moodvoice-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      ml-service:
+        condition: service_started
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://db:5432/moodvoice_db
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      ML_SERVICE_URL: http://ml-service:8000
+      APP_AUDIO_STORAGE_DIR: /app/uploads/audio
+      AES_SECRET_KEY: ${AES_SECRET_KEY:-TW9vZFZvaWNlMjAyNlNlY3VyZUFFUzI1NktleUZvckF1ZGlvIQ==}
+      JWT_SECRET: ${JWT_SECRET:-TW9vZFZvaWNlMjAyNkpXVFNlY3JldEtleUZvckF1dGhlbnRpY2F0aW9uIQ==}
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME:-dpvr9y8d7}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY:-}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET:-}
+    ports:
+      - "8080:8080"
+    volumes:
+      - audio_uploads:/app/uploads/audio
+
+  frontend:
+    build: ./Frontend
+    container_name: moodvoice-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3000:80"
+
+volumes:
+  pgdata:
+  hf_cache:
+  audio_uploads:

@@ -2,19 +2,20 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Системная библиотека для чтения WAV через soundfile
+# Системні бібліотеки для читання WAV/WebM/MP3
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libsndfile1 \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Отдельный слой под CPU-версию PyTorch (кэшируется при пересборках кода)
+# Окремий шар під CPU-версію PyTorch (кешується при перезбірках коду)
 RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Копируем исходники и обученную акустическую модель
-COPY main.py emotion_text.py emotion_audio.py ./
+# Копіюємо всі Python-модулі (включно з генерацією арту) та навчену модель
+COPY *.py ./
 COPY models/ ./models/
 
 EXPOSE 8000

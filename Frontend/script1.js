@@ -5,9 +5,10 @@ let timerInterval = null;
 let timerSeconds = 0;
 
 // Автовизначення: локально стукаємо в Spring Boot на :8080, на продакшені — в Render
-const API_BASE_URL = (window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1" || window.location.protocol === "file:")
+// На локальному http.server (:5500) стукаємо в :8080, а через Docker Nginx (:3000) чи тунель — відносний /api/
+const API_BASE_URL = (window.location.port === "5500" || window.location.protocol === "file:")
     ? "http://localhost:8080"
-    : "https://moodvoice-api.onrender.com";
+    : "";
 
 let userHistoryRecords = [];
 

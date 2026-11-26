@@ -1,17 +1,19 @@
-# Етап 1: Збірка проєкту за допомогою Maven та Java 21
-FROM maven:3.9.6-eclipse-temurin-21 AS build
+# Етап 1: збірка JAR через Maven
+FROM maven:3.9.9-eclipse-temurin-21 AS build
 WORKDIR /app
-# Копіюємо всі файли проєкту в контейнер
-COPY . .
-# Збираємо .jar файл, пропускаючи тести для швидкості
-RUN mvn clean package -DskipTests
 
-# Етап 2: Запуск готового додатка на легкій версії Java
+COPY pom.xml .
+RUN mvn dependency:go-offline -B
+
+COPY src ./src
+RUN mvn clean package -DskipTests -B
+
+# Етап 2: легкий runtime-образ з JRE 21
 FROM eclipse-temurin:21-jre
 WORKDIR /app
-# Копіюємо тільки зібраний файл з першого етапу
+
 COPY --from=build /app/target/*.jar app.jar
-# Відкриваємо порт 8080 для інтернету
+RUN mkdir -p /app/uploads/audio
+
 EXPOSE 8080
-# Команда для запуску нашого бекенду
 ENTRYPOINT ["java", "-jar", "app.jar"]
