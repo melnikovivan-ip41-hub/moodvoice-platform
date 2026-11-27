@@ -12,6 +12,13 @@ const API_BASE_URL = (window.location.port === "5500" || window.location.protoco
 
 let userHistoryRecords = [];
 
+let isDemoMode = false;
+
+function startDemoMode() {
+    isDemoMode = true;
+    showScreen('recording-screen');
+}
+
 // ===== JWT-АВТОРИЗАЦІЯ =====
 function getAuthToken() {
     return localStorage.getItem('authToken');
@@ -26,7 +33,33 @@ function clearAuthSession() {
     localStorage.removeItem('authToken');
     localStorage.removeItem('userEmail');
     localStorage.removeItem('userRole');
+    localStorage.removeItem('refreshToken');
     userHistoryRecords = [];
+}
+
+async function refreshAuthToken() {
+    const refreshToken = localStorage.getItem('refreshToken');
+    if (!refreshToken) return false;
+
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ refreshToken })
+        });
+        if (!response.ok) return false;
+
+        const data = await response.json();
+        if (data.token) {
+            localStorage.setItem('authToken', data.token);
+            if (data.refreshToken) localStorage.setItem('refreshToken', data.refreshToken);
+            if (data.role) localStorage.setItem('userRole', data.role);
+            return true;
+        }
+    } catch (err) {
+        console.error("Помилка оновлення JWT:", err);
+    }
+    return false;
 }
 
 function handleUnauthorized(response) {
@@ -164,8 +197,18 @@ function showNotification(message, type = 'error') {
 
 // ===== НАВІГАЦІЯ =====
 function showScreen(screenId) {
+    if (['landing-screen', 'login-screen', 'register-screen'].includes(screenId)) {
+        isDemoMode = false;
+    }
+
+    if (screenId === 'dashboard-screen' && isDemoMode && !getAuthToken()) {
+        isDemoMode = false;
+        screenId = 'landing-screen';
+    }
+
     const protectedScreens = ['dashboard-screen', 'recording-screen', 'analytics-screen', 'support-screen', 'profile-screen', 'admin-screen'];
-    if (protectedScreens.includes(screenId) && !getAuthToken()) {
+    const allowedInDemo = ['recording-screen', 'analytics-screen'];
+    if (protectedScreens.includes(screenId) && !getAuthToken() && !(isDemoMode && allowedInDemo.includes(screenId))) {
         screenId = 'login-screen';
     }
 
@@ -231,6 +274,9 @@ async function handleLogin(event) {
 
         if (response.ok && data.token) {
             localStorage.setItem('authToken', data.token);
+            if (data.refreshToken) {
+                localStorage.setItem('refreshToken', data.refreshToken);
+            }
             localStorage.setItem('userEmail', data.email || emailValue);
             localStorage.setItem('userRole', data.role || 'USER');
             showNotification("Вхід успішний!", "success");
@@ -270,6 +316,12 @@ async function handleRegister(event) {
         return;
     }
 
+    const consentBox = document.getElementById('register-consent');
+    if (consentBox && !consentBox.checked) {
+        showNotification("Потрібно надати згоду на обробку даних.", "error");
+        return;
+    }
+
     submitBtn.disabled = true;
     submitBtn.textContent = "Зачекайте...";
 
@@ -284,6 +336,9 @@ async function handleRegister(event) {
 
         if (response.ok && data.status === "success" && data.token) {
             localStorage.setItem('authToken', data.token);
+            if (data.refreshToken) {
+                localStorage.setItem('refreshToken', data.refreshToken);
+            }
             localStorage.setItem('userEmail', data.email || emailValue);
             localStorage.setItem('userRole', data.role || 'USER');
             showNotification("Реєстрація успішна!", "success");
@@ -317,7 +372,22 @@ function validatePassword(password) {
 }
 
 // ===== ЛОГІКА ЗАПИСУ З МІКРОФОНА =====
+const MAX_RECORDING_SECONDS = 300; // 5 хвилин
+
 async function startAudioRecording() {
+    if (!localStorage.getItem('recordingConsentAccepted')) {
+        const agreed = await showCustomConfirm(
+            "Ваш голос буде зашифровано (AES-256) та передано на AI-аналіз. Результати не є медичним діагнозом. Продовжити?",
+            "Згода на запис аудіо",
+            "Погоджуюсь"
+        );
+        if (!agreed) {
+            showScreen('dashboard-screen');
+            return;
+        }
+        localStorage.setItem('recordingConsentAccepted', 'true');
+    }
+
     audioChunks = [];
     recordingStopPromise = null;
 
@@ -336,8 +406,9 @@ async function startAudioRecording() {
         };
 
         mediaRecorder.start();
-        startTimer();
+        startTimer(true);
         updateStopButtonUI(true);
+        updatePauseButtonUI(false);
     } catch (err) {
         showNotification("Помилка доступу до мікрофона: " + err.message, "error");
         showScreen('dashboard-screen');
@@ -346,6 +417,7 @@ async function startAudioRecording() {
 
 async function stopAudioRecording() {
     stopTimer();
+    updatePauseButtonUI(false);
     updateStopButtonUI(false);
 
     if (mediaRecorder && mediaRecorder.state !== "inactive") {
@@ -356,10 +428,60 @@ async function stopAudioRecording() {
         }
         tracks.forEach(track => track.stop());
     }
+    mediaRecorder = null;
+}
+
+function togglePauseRecording() {
+    if (!mediaRecorder || mediaRecorder.state === "inactive") {
+        startAudioRecording();
+        return;
+    }
+
+    if (mediaRecorder.state === "recording") {
+        mediaRecorder.pause();
+        stopTimer();
+        updatePauseButtonUI(true);
+    } else if (mediaRecorder.state === "paused") {
+        mediaRecorder.resume();
+        startTimer(false);
+        updatePauseButtonUI(false);
+    }
+}
+
+function updatePauseButtonUI(isPaused) {
+    const icon = document.getElementById('pause-btn-icon');
+    const waveform = document.getElementById('waveform');
+    const hint = document.querySelector('.stop-hint');
+
+    if (waveform) waveform.classList.toggle('paused', isPaused);
+    if (icon) {
+        icon.innerHTML = isPaused
+            ? '<path d="M8 5v14l11-7z"/>'
+            : '<rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/>';
+    }
+    if (hint && mediaRecorder && mediaRecorder.state !== "inactive") {
+        hint.textContent = isPaused ? "Запис на паузі" : "Натисніть, щоб зупинити";
+    }
+}
+
+function startTimer(reset = true) {
+    stopTimer();
+    if (reset) {
+        timerSeconds = 0;
+        updateTimerDisplay();
+    }
+    timerInterval = setInterval(() => {
+        timerSeconds++;
+        updateTimerDisplay();
+        if (timerSeconds >= MAX_RECORDING_SECONDS) {
+            stopAudioRecording();
+            showNotification("Досягнуто ліміт запису (5 хвилин). Запис автоматично зупинено.", "success");
+        }
+    }, 1000);
 }
 
 function toggleRecording() {
-    if (mediaRecorder && mediaRecorder.state === "recording") {
+    if (mediaRecorder && (mediaRecorder.state === "recording" || mediaRecorder.state === "paused")) {
         stopAudioRecording();
     } else {
         startAudioRecording();
@@ -369,7 +491,12 @@ function toggleRecording() {
 function updateStopButtonUI(isRecording) {
     const stopBtn = document.querySelector('.stop-button');
     const hint = document.querySelector('.stop-hint');
+    const waveform = document.getElementById('waveform');
+    const pauseBtn = document.getElementById('pause-recording-btn');
     if (!stopBtn) return;
+
+    if (waveform) waveform.classList.toggle('paused', !isRecording);
+    if (pauseBtn) pauseBtn.classList.toggle('hidden', !isRecording);
 
     if (isRecording) {
         stopBtn.style.background = "var(--color-danger)";
@@ -421,6 +548,7 @@ async function loadUserHistory() {
         if (weekLabel) weekLabel.textContent = "За 7 днів";
 
         renderMoodChart(userHistoryRecords);
+        renderMoodCalendar(userHistoryRecords);
         applyHistoryFilters();
     } catch (error) {
         console.error(error);
@@ -449,10 +577,9 @@ function openAnalytics(indexOrRecord) {
 
     showScreen('analytics-screen');
 
-    const dateObj = new Date(record.createdAt);
+    const dateObj = record.createdAt ? new Date(record.createdAt) : new Date();
     const dateStr = dateObj.toLocaleDateString('uk-UA', { day: 'numeric', month: 'long', year: 'numeric' });
     const timeStr = dateObj.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
-    
 
     document.querySelector('.analytics-date').innerHTML = `
         <span><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg> ${dateStr}</span>
@@ -490,7 +617,6 @@ function openAnalytics(indexOrRecord) {
             img.alt = `Арт настрою: ${meta.label}`;
             artSection.prepend(img);
         } else {
-            // Fallback-градієнт для старих записів без згенерованого арту
             artSection.style.background = meta.gradient;
         }
     }
@@ -499,88 +625,91 @@ function openAnalytics(indexOrRecord) {
         artBadge.textContent = confPct != null ? `${meta.label} • ${confPct}%` : meta.label;
     }
 
-    // 3. Аудіоплеєр (без жорсткого audio/webm — працює і з mp3, і з webm, і з wav)
+    // 3. Аудіоплеєр (лише для збережених записів, не в демо-режимі)
     const oldPlayer = document.getElementById('custom-audio-player');
     if (oldPlayer) oldPlayer.remove();
 
-    const encodedToken = encodeURIComponent(getAuthToken() || "");
-    const playerHtml = `
-        <div id="custom-audio-player" class="sleek-player">
-            <audio id="real-audio" src="${API_BASE_URL}/api/audio/play/${record.id}?token=${encodedToken}" preload="metadata" style="display: none;"></audio>
+    if (record.id && !isDemoMode) {
+        const encodedToken = encodeURIComponent(getAuthToken() || "");
+        const playerHtml = `
+            <div id="custom-audio-player" class="sleek-player">
+                <audio id="real-audio" src="${API_BASE_URL}/api/audio/play/${record.id}?token=${encodedToken}" preload="metadata" style="display: none;"></audio>
 
-            <button id="play-pause-btn" class="sleek-play-btn">
-                <svg id="icon-play" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-                <svg id="icon-pause" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="display:none;"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
-            </button>
+                <button id="play-pause-btn" class="sleek-play-btn">
+                    <svg id="icon-play" width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                    <svg id="icon-pause" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" style="display:none;"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg>
+                </button>
 
-            <div class="sleek-progress-bg" id="progress-bg">
-                <div class="sleek-progress-fill" id="progress-fill"></div>
+                <div class="sleek-progress-bg" id="progress-bg">
+                    <div class="sleek-progress-fill" id="progress-fill"></div>
+                </div>
+
+                <div class="sleek-time" id="time-display">0:00</div>
             </div>
+        `;
+        artSection.insertAdjacentHTML('beforebegin', playerHtml);
 
-            <div class="sleek-time" id="time-display">0:00</div>
-        </div>
-    `;
-    artSection.insertAdjacentHTML('beforebegin', playerHtml);
+        const audioEl = document.getElementById('real-audio');
+        const playBtn = document.getElementById('play-pause-btn');
+        const iconPlay = document.getElementById('icon-play');
+        const iconPause = document.getElementById('icon-pause');
+        const progressBg = document.getElementById('progress-bg');
+        const progressFill = document.getElementById('progress-fill');
+        const timeDisplay = document.getElementById('time-display');
 
-    const audioEl = document.getElementById('real-audio');
-    const playBtn = document.getElementById('play-pause-btn');
-    const iconPlay = document.getElementById('icon-play');
-    const iconPause = document.getElementById('icon-pause');
-    const progressBg = document.getElementById('progress-bg');
-    const progressFill = document.getElementById('progress-fill');
-    const timeDisplay = document.getElementById('time-display');
+        const formatTime = (time) => {
+            if (!isFinite(time) || isNaN(time)) return "0:00";
+            const m = Math.floor(time / 60);
+            const s = Math.floor(time % 60).toString().padStart(2, '0');
+            return `${m}:${s}`;
+        };
 
-    const formatTime = (time) => {
-        if (!isFinite(time) || isNaN(time)) return "0:00";
-        const m = Math.floor(time / 60);
-        const s = Math.floor(time % 60).toString().padStart(2, '0');
-        return `${m}:${s}`;
-    };
+        audioEl.onloadedmetadata = () => {
+            if (isFinite(audioEl.duration)) {
+                timeDisplay.textContent = `0:00 / ${formatTime(audioEl.duration)}`;
+            }
+        };
 
-    audioEl.onloadedmetadata = () => {
-        if (isFinite(audioEl.duration)) {
-            timeDisplay.textContent = `0:00 / ${formatTime(audioEl.duration)}`;
-        }
-    };
+        playBtn.onclick = () => {
+            if (audioEl.paused) {
+                audioEl.play().catch(err => showNotification("Не вдалося відтворити аудіо: " + err.message, "error"));
+                iconPlay.style.display = 'none';
+                iconPause.style.display = 'block';
+            } else {
+                audioEl.pause();
+                iconPlay.style.display = 'block';
+                iconPause.style.display = 'none';
+            }
+        };
 
-    playBtn.onclick = () => {
-        if (audioEl.paused) {
-            audioEl.play().catch(err => showNotification("Не вдалося відтворити аудіо: " + err.message, "error"));
-            iconPlay.style.display = 'none';
-            iconPause.style.display = 'block';
-        } else {
-            audioEl.pause();
+        audioEl.ontimeupdate = () => {
+            if (isFinite(audioEl.duration) && audioEl.duration > 0) {
+                const percent = (audioEl.currentTime / audioEl.duration) * 100;
+                progressFill.style.width = `${percent}%`;
+                timeDisplay.textContent = `${formatTime(audioEl.currentTime)} / ${formatTime(audioEl.duration)}`;
+            } else {
+                timeDisplay.textContent = formatTime(audioEl.currentTime);
+            }
+        };
+
+        progressBg.onclick = (e) => {
+            if (!isFinite(audioEl.duration) || !audioEl.duration) return;
+            const rect = progressBg.getBoundingClientRect();
+            const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+            audioEl.currentTime = percent * audioEl.duration;
+        };
+
+        audioEl.onended = () => {
             iconPlay.style.display = 'block';
             iconPause.style.display = 'none';
-        }
-    };
+            progressFill.style.width = '0%';
+        };
+    }
 
-    audioEl.ontimeupdate = () => {
-        if (isFinite(audioEl.duration) && audioEl.duration > 0) {
-            const percent = (audioEl.currentTime / audioEl.duration) * 100;
-            progressFill.style.width = `${percent}%`;
-            timeDisplay.textContent = `${formatTime(audioEl.currentTime)} / ${formatTime(audioEl.duration)}`;
-        } else {
-            timeDisplay.textContent = formatTime(audioEl.currentTime);
-        }
-    };
-
-    progressBg.onclick = (e) => {
-        if (!isFinite(audioEl.duration) || !audioEl.duration) return;
-        const rect = progressBg.getBoundingClientRect();
-        const percent = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-        audioEl.currentTime = percent * audioEl.duration;
-    };
-
-    audioEl.onended = () => {
-        iconPlay.style.display = 'block';
-        iconPause.style.display = 'none';
-        progressFill.style.width = '0%';
-    };
-
-    // 4. Кнопка видалення та збереження арту
+    // 4. Кнопка видалення, збереження арту та нижня кнопка дії
     const deleteBtn = document.querySelector('[data-testid="delete-btn"]');
     if (deleteBtn) {
+        deleteBtn.style.display = isDemoMode ? 'none' : 'flex';
         deleteBtn.onclick = () => deleteRecord(record.id);
     }
 
@@ -597,6 +726,17 @@ function openAnalytics(indexOrRecord) {
             link.click();
             showNotification("Арт настрою збережено!", "success");
         };
+    }
+
+    const newRecordBtn = document.querySelector('[data-testid="new-record-btn"]');
+    if (newRecordBtn) {
+        if (isDemoMode) {
+            newRecordBtn.textContent = "Зареєструватися, щоб зберігати історію";
+            newRecordBtn.onclick = () => showScreen('register-screen');
+        } else {
+            newRecordBtn.textContent = "Створити новий запис";
+            newRecordBtn.onclick = () => showScreen('recording-screen');
+        }
     }
 
     // 5. Транскрипція
@@ -637,18 +777,7 @@ function openAnalytics(indexOrRecord) {
         }
     }
 }
-
 // ===== ТАЙМЕР =====
-function startTimer() {
-    stopTimer();
-    timerSeconds = 0;
-    updateTimerDisplay();
-    timerInterval = setInterval(() => {
-        timerSeconds++;
-        updateTimerDisplay();
-    }, 1000);
-}
-
 function stopTimer() {
     if (timerInterval) {
         clearInterval(timerInterval);
@@ -676,7 +805,6 @@ async function saveRecording() {
     const cancelBtn = document.querySelector('[data-testid="cancel-recording-btn"]');
     const originalText = saveBtn ? saveBtn.textContent : "Зберегти";
 
-    // Чекаємо завершення MediaRecorder, щоб останній шматок аудіо гарантовано потрапив у audioChunks
     await stopAudioRecording();
 
     if (audioChunks.length === 0) {
@@ -686,11 +814,9 @@ async function saveRecording() {
 
     if (saveBtn) {
         saveBtn.disabled = true;
-        saveBtn.textContent = "Аналізуємо голос...";
+        saveBtn.textContent = "Зберігаємо...";
     }
     if (cancelBtn) cancelBtn.disabled = true;
-
-    showNotification("Завантажуємо аудіо та запускаємо AI-аналіз...", "success");
 
     const mimeType = (mediaRecorder && mediaRecorder.mimeType) ? mediaRecorder.mimeType : 'audio/webm';
     const audioBlob = new Blob(audioChunks, { type: mimeType });
@@ -699,36 +825,98 @@ async function saveRecording() {
     formData.append("file", audioBlob, "record.webm");
 
     try {
-        const response = await fetch(`${API_BASE_URL}/api/audio/upload`, {
+        const endpoint = isDemoMode ? `${API_BASE_URL}/api/audio/demo` : `${API_BASE_URL}/api/audio/upload`;
+        const headers = isDemoMode ? {} : getAuthHeaders();
+
+        if (isDemoMode && saveBtn) {
+            saveBtn.textContent = "Аналізуємо голос...";
+        }
+
+        const response = await fetch(endpoint, {
             method: "POST",
-            headers: getAuthHeaders(),
+            headers,
             body: formData
         });
 
-        if (handleUnauthorized(response)) return;
+        if (!isDemoMode && handleUnauthorized(response)) return;
         const data = await response.json();
 
         if (response.ok && data.status === "success") {
-            showNotification(data.message || "Готово!", "success");
             audioChunks = [];
-            await loadUserHistory();
-            if (userHistoryRecords.length > 0) {
-                openAnalytics(0);
-            } else if (data.record) {
-                openAnalytics(data.record);
+            if (isDemoMode) {
+                showNotification("Демо-аналіз готовий! Запис не збережено.", "success");
+                if (data.record) openAnalytics(data.record);
+            } else {
+                showNotification("Аудіо збережено! AI-аналіз триває у фоні...", "success");
+                showScreen('dashboard-screen');
+                if (data.recordId) {
+                    pollRecordStatus(data.recordId);
+                }
             }
         } else {
             showNotification("Помилка: " + (data.message || "Невідома помилка"), "error");
         }
     } catch (error) {
         console.error("Помилка відправки:", error);
-        showNotification("Сервер не відповідає. Перевірте, чи запущені Spring Boot (:8080) та ML-сервіс (:8000).", "error");
+        showNotification("Сервер не відповідає. Перевірте Spring Boot (:8080).", "error");
     } finally {
         if (saveBtn) {
             saveBtn.disabled = false;
             saveBtn.textContent = originalText;
         }
         if (cancelBtn) cancelBtn.disabled = false;
+    }
+}
+
+async function pollRecordStatus(recordId, maxAttempts = 30) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        try {
+            const response = await fetch(`${API_BASE_URL}/api/audio/status/${recordId}`, {
+                headers: getAuthHeaders()
+            });
+            if (!response.ok) return;
+
+            const data = await response.json();
+            if (data.status === "COMPLETED") {
+                showNotification("AI-аналіз завершено!", "success");
+                await loadUserHistory();
+                if (data.record) {
+                    openAnalytics(data.record);
+                }
+                return;
+            }
+            if (data.status === "FAILED") {
+                showNotification("Помилка ML-аналізу. Аудіо збережено — можна повторити пізніше.", "error");
+                await loadUserHistory();
+                return;
+            }
+        } catch (err) {
+            console.error("Помилка перевірки статусу:", err);
+        }
+    }
+}
+
+async function retryRecordAnalysis(recordId) {
+    try {
+        const response = await fetch(`${API_BASE_URL}/api/audio/${recordId}/retry`, {
+            method: "POST",
+            headers: getAuthHeaders()
+        });
+        if (handleUnauthorized(response)) return;
+        const data = await response.json();
+
+        if (response.ok && data.status === "success") {
+            showNotification("Повторний аналіз запущено...", "success");
+            await loadUserHistory();
+            pollRecordStatus(recordId);
+        } else {
+            showNotification(data.message || "Не вдалося перезапустити аналіз", "error");
+        }
+    } catch (err) {
+        console.error("Помилка retry:", err);
+        showNotification("Сервер не відповідає", "error");
     }
 }
 
@@ -823,11 +1011,24 @@ document.addEventListener('DOMContentLoaded', () => {
         bar.style.animationDelay = `${delay}s`;
         bar.style.animationDuration = `${duration}s`;
     });
+
+    if (localStorage.getItem('refreshToken')) {
+        refreshAuthToken();
+        setInterval(refreshAuthToken, 45 * 60 * 1000);
+    }
 });
 
 // ===== ФІЛЬТРИ ІСТОРІЇ ТА ГРАФІК CHART.JS =====
 let activeMoodFilter = 'all';
 let moodChartInstance = null;
+let activeChartPeriod = '7d';
+
+function setChartPeriod(period, btnEl) {
+    activeChartPeriod = period;
+    document.querySelectorAll('#chart-period-chips .filter-chip').forEach(c => c.classList.remove('active'));
+    if (btnEl) btnEl.classList.add('active');
+    renderMoodChart(userHistoryRecords);
+}
 
 function getRecordMoodKey(record) {
     const normalized = (record.moodType || "").toLowerCase();
@@ -885,15 +1086,33 @@ function applyHistoryFilters() {
         const dateObj = new Date(record.createdAt);
         const dateStr = dateObj.toLocaleDateString('uk-UA', { day: 'numeric', month: 'long', year: 'numeric' });
         const timeStr = dateObj.toLocaleTimeString('uk-UA', { hour: '2-digit', minute: '2-digit' });
+
+        const status = record.status || 'COMPLETED';
         const meta = getMoodMeta(record.moodType, record.crisisDetected);
 
-        const rawText = (record.transcription || "").trim();
-        const previewText = rawText.length > 110
-            ? escapeHtml(rawText.slice(0, 110)) + "..."
-            : escapeHtml(rawText || "Натисніть, щоб відкрити аналітику та прослухати");
+        let badgeHtml = `<span class="mood-tag ${meta.tagClass}">${escapeHtml(meta.label)}</span>`;
+        let previewText = "";
+        let clickAction = `openAnalytics(${origIndex})`;
+        let retryBtnHtml = "";
+
+        if (status === 'PENDING') {
+            badgeHtml = `<span class="mood-tag tag-pending">Аналізується...</span>`;
+            previewText = "AI-аналіз триває у фоні. Результат з'явиться автоматично.";
+            clickAction = `showNotification('Запис ще обробляється AI, зачекайте кілька секунд.', 'success')`;
+        } else if (status === 'FAILED') {
+            badgeHtml = `<span class="mood-tag tag-failed">Помилка аналізу</span>`;
+            previewText = "ML-сервіс був недоступний, але ваше зашифроване аудіо збережено.";
+            clickAction = `showNotification('Натисніть «Повторити аналіз», щоб обробити запис.', 'error')`;
+            retryBtnHtml = `<button class="retry-btn" onclick="event.stopPropagation(); retryRecordAnalysis(${record.id})">Повторити аналіз</button>`;
+        } else {
+            const rawText = (record.transcription || "").trim();
+            previewText = rawText.length > 110
+                ? escapeHtml(rawText.slice(0, 110)) + "..."
+                : escapeHtml(rawText || "Натисніть, щоб відкрити аналітику та прослухати");
+        }
 
         const recordHtml = `
-            <div class="history-item" onclick="openAnalytics(${origIndex})">
+            <div class="history-item" onclick="${clickAction}">
                 <div class="history-header">
                     <div class="history-meta">
                         <div class="history-date">
@@ -913,9 +1132,10 @@ function applyHistoryFilters() {
                             ${timeStr}
                         </div>
                     </div>
-                    <span class="mood-tag ${meta.tagClass}">${escapeHtml(meta.label)}</span>
+                    ${badgeHtml}
                 </div>
                 <p class="history-preview">${previewText}</p>
+                ${retryBtnHtml}
             </div>
         `;
         historyList.insertAdjacentHTML('beforeend', recordHtml);
@@ -928,9 +1148,17 @@ function renderMoodChart(records) {
     const emptyMsg = document.getElementById('chart-empty-msg');
     if (!canvas || typeof Chart === 'undefined') return;
 
+    const now = Date.now();
+    const periodLimitMs = activeChartPeriod === '7d'
+        ? 7 * 24 * 60 * 60 * 1000
+        : activeChartPeriod === '30d'
+            ? 30 * 24 * 60 * 60 * 1000
+            : null;
+
     const scored = records
         .filter(r => r.calmScore != null || r.joyScore != null || r.sadnessScore != null || r.stressScore != null)
-        .slice(0, 12)
+        .filter(r => !periodLimitMs || (r.createdAt && (now - new Date(r.createdAt).getTime()) <= periodLimitMs))
+        .slice(0, 30)
         .reverse();
 
     if (moodChartInstance) {
@@ -1204,4 +1432,86 @@ async function toggleBlockUser(userId, nextBlocked, email) {
         console.error(error);
         showNotification("Сервер не відповідає", "error");
     }
+}
+
+// ===== КАЛЕНДАР НАСТРОЮ =====
+let calendarViewDate = new Date();
+
+function changeCalendarMonth(delta) {
+    calendarViewDate = new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() + delta, 1);
+    renderMoodCalendar(userHistoryRecords);
+}
+
+function renderMoodCalendar(records) {
+    const grid = document.getElementById('mood-calendar-grid');
+    const label = document.getElementById('calendar-month-label');
+    if (!grid || !label) return;
+
+    const year = calendarViewDate.getFullYear();
+    const month = calendarViewDate.getMonth();
+
+    label.textContent = calendarViewDate.toLocaleDateString('uk-UA', { month: 'long', year: 'numeric' });
+
+    // Групуємо всі завершені записи за датою YYYY-MM-DD
+    const dayMap = {};
+    (records || []).forEach(r => {
+        if (!r.createdAt || (r.status && r.status !== 'COMPLETED')) return;
+        const d = new Date(r.createdAt);
+        const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        if (!dayMap[key]) dayMap[key] = [];
+        dayMap[key].push(r);
+    });
+
+    const moodLabels = {
+        calm: 'Спокій',
+        joy: 'Радість',
+        sadness: 'Сум',
+        stress: 'Стрес / Тривога',
+        crisis: 'Потрібна підтримка'
+    };
+
+    const firstDay = new Date(year, month, 1);
+    const startOffset = (firstDay.getDay() + 6) % 7; // Пн = 0 ... Нд = 6
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    const today = new Date();
+    const todayKey = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+
+    let html = '';
+    for (let i = 0; i < startOffset; i++) {
+        html += '<div class="calendar-day empty"></div>';
+    }
+
+    for (let day = 1; day <= daysInMonth; day++) {
+        const key = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+        const dayRecords = dayMap[key];
+        const isToday = key === todayKey ? ' today' : '';
+
+        if (dayRecords && dayRecords.length > 0) {
+            const hasCrisis = dayRecords.some(r => r.crisisDetected);
+            let moodKey = 'calm';
+
+            if (hasCrisis) {
+                moodKey = 'crisis';
+            } else {
+                const totals = { calm: 0, joy: 0, sadness: 0, stress: 0 };
+                dayRecords.forEach(r => {
+                    totals.calm += Number(r.calmScore || 0);
+                    totals.joy += Number(r.joyScore || 0);
+                    totals.sadness += Number(r.sadnessScore || 0);
+                    totals.stress += Number(r.stressScore || 0);
+                });
+                moodKey = Object.entries(totals).sort((a, b) => b[1] - a[1])[0][0];
+            }
+
+            const latestRecord = dayRecords[0];
+            const origIndex = userHistoryRecords.indexOf(latestRecord);
+            const title = `${moodLabels[moodKey]} (записів: ${dayRecords.length}) — натисніть, щоб відкрити`;
+            html += `<div class="calendar-day has-record mood-${moodKey}${isToday}" onclick="openAnalytics(${origIndex})" title="${escapeHtml(title)}">${day}</div>`;
+        } else {
+            html += `<div class="calendar-day${isToday}">${day}</div>`;
+        }
+    }
+
+    grid.innerHTML = html;
 }

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MoodVoice — Інтелектуальний голосовий щоденник</title>
 	<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><defs><linearGradient id='g' x1='0%' y1='0%' x2='100%' y2='100%'><stop offset='0%' stop-color='%23a855f7'/><stop offset='100%' stop-color='%236366f1'/></linearGradient></defs><rect width='24' height='24' rx='6' fill='url(%23g)'/><path fill='white' d='M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z'/><path fill='white' d='M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z'/></svg>">
-	<link rel = "stylesheet" type = "text/css" href = "style.css">
+	<link rel="stylesheet" type="text/css" href="style.css?v=2">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 	<script src="script1.js"></script>
 </head>
@@ -38,6 +38,7 @@
                 <p class="landing-subtitle">Запишіть свої думки голосом. AI проаналізує ваші емоції та створить унікальне візуальне відображення настрою. Повністю анонімно та безпечно.</p>
                 <div class="landing-buttons">
                     <button class="btn btn-primary" data-testid="get-started-btn" onclick="showScreen('register-screen')">Почати безкоштовно</button>
+                    <button class="btn btn-secondary" onclick="startDemoMode()">Спробувати без реєстрації</button>
                     <button class="btn btn-secondary" data-testid="landing-login-btn" onclick="showScreen('login-screen')">Увійти</button>
                 </div>
             </section>
@@ -82,6 +83,10 @@
                 <h3 class="support-title">Анонімна підтримка</h3>
                 <p class="support-desc">Знайдіть людей зі схожими переживаннями. Підтримайте одне одного без розкриття особистості.</p>
             </section>
+
+            <p class="landing-disclaimer">
+                MoodVoice призначений для саморефлексії та не є медичним діагнозом або заміною професійної психологічної допомоги.
+            </p>
         </div>
     </div>
 
@@ -183,6 +188,11 @@
                 </div>
             </div>
 
+            <label class="consent-label">
+                <input type="checkbox" id="register-consent" required>
+                <span>Я надаю згоду на обробку та шифрування (AES-256) моїх даних і розумію, що сервіс не є медичним інструментом.</span>
+            </label>
+
             <button type="submit" class="btn btn-primary btn-full">Зареєструватися</button>
             </form>
 
@@ -268,9 +278,13 @@
 
             <!-- ГРАФІК ДИНАМІКИ НАСТРОЮ (Chart.js) -->
             <section class="chart-card" id="mood-chart-section">
-                <div class="section-header" style="margin-bottom: 12px;">
+                <div class="section-header" style="margin-bottom: 12px; flex-wrap: wrap; gap: 8px;">
                     <h3 class="section-title">Динаміка емоцій</h3>
-                    <span class="chart-subtitle" id="chart-subtitle">Останні записи</span>
+                    <div class="filter-chips" id="chart-period-chips">
+                        <button type="button" class="filter-chip active" data-period="7d" onclick="setChartPeriod('7d', this)">7 днів</button>
+                        <button type="button" class="filter-chip" data-period="30d" onclick="setChartPeriod('30d', this)">30 днів</button>
+                        <button type="button" class="filter-chip" data-period="all" onclick="setChartPeriod('all', this)">Усі</button>
+                    </div>
                 </div>
                 <div class="chart-wrapper">
                     <canvas id="mood-dynamics-chart"></canvas>
@@ -278,6 +292,28 @@
                 <p id="chart-empty-msg" class="chart-empty-msg" style="display: none;">
                     Створіть щонайменше 2 записи, щоб побачити динаміку емоцій на графіку.
                 </p>
+            </section>
+
+            <!-- КАЛЕНДАР НАСТРОЮ -->
+            <section class="chart-card" id="mood-calendar-section">
+                <div class="section-header" style="margin-bottom: 12px;">
+                    <h3 class="section-title">Календар настрою</h3>
+                    <div class="calendar-nav">
+                        <button type="button" class="calendar-nav-btn" onclick="changeCalendarMonth(-1)" title="Попередній місяць">‹</button>
+                        <span id="calendar-month-label" class="calendar-month-label"></span>
+                        <button type="button" class="calendar-nav-btn" onclick="changeCalendarMonth(1)" title="Наступний місяць">›</button>
+                    </div>
+                </div>
+                <div class="calendar-weekdays">
+                    <span>Пн</span><span>Вт</span><span>Ср</span><span>Чт</span><span>Пт</span><span>Сб</span><span>Нд</span>
+                </div>
+                <div id="mood-calendar-grid" class="calendar-grid"></div>
+                <div class="calendar-legend">
+                    <span><i class="legend-dot calm"></i>Спокій</span>
+                    <span><i class="legend-dot joy"></i>Радість</span>
+                    <span><i class="legend-dot sadness"></i>Сум</span>
+                    <span><i class="legend-dot stress"></i>Стрес</span>
+                </div>
             </section>
 
             <!-- АРХІВ ЗАПИСІВ З ФІЛЬТРАМИ -->
@@ -343,12 +379,19 @@
                 <div class="wave-bar" style="height: 15px; animation-delay: 1s;"></div>
             </div>
 
-            <button class="stop-button" data-testid="stop-recording-btn" onclick="toggleRecording()">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
-                    <rect x="6" y="6" width="4" height="12" rx="1"/>
-                    <rect x="14" y="6" width="4" height="12" rx="1"/>
-                </svg>
-            </button>
+            <div class="recording-controls">
+                <button class="pause-button" id="pause-recording-btn" onclick="togglePauseRecording()" title="Пауза / Продовжити">
+                    <svg id="pause-btn-icon" width="22" height="22" viewBox="0 0 24 24" fill="white">
+                        <rect x="6" y="5" width="4" height="14" rx="1"/>
+                        <rect x="14" y="5" width="4" height="14" rx="1"/>
+                    </svg>
+                </button>
+                <button class="stop-button" data-testid="stop-recording-btn" onclick="toggleRecording()">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="white">
+                        <rect x="6" y="6" width="12" height="12" rx="2"/>
+                    </svg>
+                </button>
+            </div>
             <p class="stop-hint">Натисніть, щоб зупинити</p>
 
             <button class="music-button" data-testid="music-mood-btn" onclick="toggleMusic(this)">
@@ -489,6 +532,10 @@
                     </div>
                 </div>
             </section>
+
+            <div class="medical-disclaimer">
+                <strong>Важливо:</strong> результати AI-аналізу мають виключно інформаційний характер і <strong>не є медичним діагнозом</strong> або заміною консультації спеціаліста.
+            </div>
 
             <section class="reflection-section">
                 <h3 class="section-title" style="margin-bottom: 12px;">AI-рефлексія</h3>

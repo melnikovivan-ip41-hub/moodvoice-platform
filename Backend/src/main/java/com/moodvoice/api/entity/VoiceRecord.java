@@ -17,6 +17,8 @@ public class VoiceRecord {
     @Column(nullable = false)
     private String filePath;
 
+    
+
     private String cloudinaryPublicId;
 
     private String moodType;
@@ -38,6 +40,9 @@ public class VoiceRecord {
 
     @Column(columnDefinition = "TEXT")
     private String moodArtBase64;
+
+    @Column(name = "status", length = 20)
+    private String status = "COMPLETED";
 
     private LocalDateTime createdAt;
     private Long fileSize;
@@ -80,6 +85,8 @@ public class VoiceRecord {
     public void setCrisisMessage(String crisisMessage) { this.crisisMessage = crisisMessage; }
     public String getMoodArtBase64() { return moodArtBase64; }
     public void setMoodArtBase64(String moodArtBase64) { this.moodArtBase64 = moodArtBase64; }
+    public String getStatus() { return status; }
+    public void setStatus(String status) { this.status = status; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public Long getFileSize() { return fileSize; }
 }

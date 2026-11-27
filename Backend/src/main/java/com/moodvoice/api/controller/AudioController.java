@@ -2,10 +2,11 @@ package com.moodvoice.api.controller;
 
 import com.cloudinary.Cloudinary;
 import com.cloudinary.utils.ObjectUtils;
-import com.moodvoice.api.dto.MlAnalysisResponse;
 import com.moodvoice.api.entity.VoiceRecord;
 import com.moodvoice.api.repository.VoiceRecordRepository;
 import com.moodvoice.api.service.AudioCryptoService;
+import com.moodvoice.api.service.AudioProcessingService;
+import com.moodvoice.api.dto.MlAnalysisResponse;
 import com.moodvoice.api.service.MlServiceClient;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
@@ -43,19 +44,19 @@ public class AudioController {
     private Cloudinary cloudinary;
 
     @Autowired
-    private MlServiceClient mlServiceClient;
+    private AudioProcessingService audioProcessingService;
 
     @Autowired
     private AudioCryptoService audioCryptoService;
+
+    @Autowired
+    private MlServiceClient mlServiceClient;
 
     @Value("${app.audio.storage-dir:uploads/audio}")
     private String storageDir;
 
     private boolean canAccessRecord(VoiceRecord record, Authentication authentication) {
-        String currentEmail = authentication.getName();
-        boolean isAdmin = authentication.getAuthorities().stream()
-                .anyMatch(a -> "ROLE_ADMIN".equals(a.getAuthority()));
-        return isAdmin || record.getUserEmail().equalsIgnoreCase(currentEmail);
+        return record.getUserEmail().equalsIgnoreCase(authentication.getName());
     }
 
     @PostMapping("/upload")
@@ -87,47 +88,100 @@ public class AudioController {
             Path encryptedFilePath = dirPath.resolve(encryptedFilename);
             Files.write(encryptedFilePath, encryptedBytes);
 
-            MlAnalysisResponse mlResult = mlServiceClient.analyzeAudio(audioBytes, file.getOriginalFilename());
-
             VoiceRecord record = new VoiceRecord(email, encryptedFilePath.toString(), file.getSize());
             record.setCloudinaryPublicId(null);
-
-            if (mlResult != null) {
-                record.setTranscription(mlResult.transcript());
-                record.setMoodType(mlResult.overall_mood());
-                record.setConfidence(mlResult.confidence());
-                record.setIsLowConfidence(mlResult.is_low_confidence());
-                record.setCrisisDetected(mlResult.crisis_detected());
-                record.setCrisisMessage(mlResult.crisis_message());
-                record.setMoodArtBase64(mlResult.mood_art_base64());
-
-                if (mlResult.emotions() != null) {
-                    record.setCalmScore(mlResult.emotions().getOrDefault("calm", 0.0));
-                    record.setJoyScore(mlResult.emotions().getOrDefault("joy", 0.0));
-                    record.setSadnessScore(mlResult.emotions().getOrDefault("sadness", 0.0));
-                    record.setStressScore(mlResult.emotions().getOrDefault("stress", 0.0));
-                }
-            }
+            record.setStatus("PENDING");
 
             VoiceRecord saved = voiceRecordRepository.save(record);
 
-            return ResponseEntity.ok(Map.of(
-                    "message", "Аудіо зашифровано (AES-256), збережено та проаналізовано!",
+            audioProcessingService.processAudioAsync(saved.getId(), audioBytes, file.getOriginalFilename());
+
+            return ResponseEntity.accepted().body(Map.of(
+                    "message", "Аудіо зашифровано (AES-256) та передано на фоновий AI-аналіз!",
                     "status", "success",
                     "recordId", saved.getId().toString(),
                     "record", saved
             ));
 
         } catch (Exception e) {
-            System.err.println("Помилка завантаження або ML-аналізу: " + e.getMessage());
+            if (audioBytes != null) {
+                Arrays.fill(audioBytes, (byte) 0);
+            }
+            System.err.println("Помилка завантаження аудіо: " + e.getMessage());
             return ResponseEntity.internalServerError().body(Map.of(
                     "message", "Помилка сервера: " + e.getMessage(),
                     "status", "error"
             ));
-        } finally {
+        }
+    }
+
+    @GetMapping("/status/{id}")
+    public ResponseEntity<?> getRecordStatus(@PathVariable Long id, Authentication authentication) {
+        VoiceRecord record = voiceRecordRepository.findById(id).orElse(null);
+        if (record == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                    "status", "error",
+                    "message", "Запис не знайдено"
+            ));
+        }
+        if (!canAccessRecord(record, authentication)) {
+            return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                    "status", "error",
+                    "message", "Немає доступу до цього запису"
+            ));
+        }
+        return ResponseEntity.ok(Map.of(
+                "id", record.getId(),
+                "status", record.getStatus() != null ? record.getStatus() : "COMPLETED",
+                "record", record
+        ));
+    }
+
+    @PostMapping("/{id}/retry")
+    public ResponseEntity<?> retryAnalysis(@PathVariable Long id, Authentication authentication) {
+        byte[] audioBytes = null;
+        try {
+            VoiceRecord record = voiceRecordRepository.findById(id)
+                    .orElseThrow(() -> new RuntimeException("Запис не знайдено"));
+
+            if (!canAccessRecord(record, authentication)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body(Map.of(
+                        "status", "error",
+                        "message", "Немає доступу до цього запису"
+                ));
+            }
+
+            Path filePath = Paths.get(record.getFilePath());
+            if (!Files.exists(filePath)) {
+                return ResponseEntity.status(HttpStatus.NOT_FOUND).body(Map.of(
+                        "status", "error",
+                        "message", "Аудіофайл не знайдено на диску"
+                ));
+            }
+
+            byte[] fileBytes = Files.readAllBytes(filePath);
+            audioBytes = record.getFilePath().endsWith(".enc")
+                    ? audioCryptoService.decrypt(fileBytes)
+                    : fileBytes;
+
+            record.setStatus("PENDING");
+            voiceRecordRepository.save(record);
+
+            audioProcessingService.processAudioAsync(record.getId(), audioBytes, "record-" + id + ".webm");
+
+            return ResponseEntity.accepted().body(Map.of(
+                    "status", "success",
+                    "message", "Повторний аналіз запущено",
+                    "record", record
+            ));
+        } catch (Exception e) {
             if (audioBytes != null) {
                 Arrays.fill(audioBytes, (byte) 0);
             }
+            return ResponseEntity.internalServerError().body(Map.of(
+                    "status", "error",
+                    "message", "Не вдалося перезапустити аналіз: " + e.getMessage()
+            ));
         }
     }
 
@@ -218,6 +272,64 @@ public class AudioController {
                     "status", "error",
                     "message", e.getMessage()
             ));
+        }
+    }
+
+    @PostMapping("/demo")
+    public ResponseEntity<?> demoAnalyze(@RequestParam("file") MultipartFile file) {
+        if (file.isEmpty()) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "message", "Файл порожній",
+                    "status", "error"
+            ));
+        }
+        if (file.getSize() > MAX_FILE_SIZE_BYTES) {
+            return ResponseEntity.badRequest().body(Map.of(
+                    "message", "Файл перевищує ліміт 25 МБ",
+                    "status", "error"
+            ));
+        }
+
+        byte[] audioBytes = null;
+        try {
+            audioBytes = file.getBytes();
+            MlAnalysisResponse mlResult = mlServiceClient.analyzeAudio(audioBytes, file.getOriginalFilename());
+            if (mlResult == null) {
+                throw new RuntimeException("ML-сервіс не відповів");
+            }
+
+            VoiceRecord demoRecord = new VoiceRecord("guest@demo", "", file.getSize());
+            demoRecord.setStatus("COMPLETED");
+            demoRecord.setTranscription(mlResult.transcript());
+            demoRecord.setMoodType(mlResult.overall_mood());
+            demoRecord.setConfidence(mlResult.confidence());
+            demoRecord.setIsLowConfidence(mlResult.is_low_confidence());
+            demoRecord.setCrisisDetected(mlResult.crisis_detected());
+            demoRecord.setCrisisMessage(mlResult.crisis_message());
+            demoRecord.setMoodArtBase64(mlResult.mood_art_base64());
+
+            if (mlResult.emotions() != null) {
+                demoRecord.setCalmScore(mlResult.emotions().getOrDefault("calm", 0.0));
+                demoRecord.setJoyScore(mlResult.emotions().getOrDefault("joy", 0.0));
+                demoRecord.setSadnessScore(mlResult.emotions().getOrDefault("sadness", 0.0));
+                demoRecord.setStressScore(mlResult.emotions().getOrDefault("stress", 0.0));
+            }
+
+            return ResponseEntity.ok(Map.of(
+                    "message", "Демо-аналіз завершено (без збереження)",
+                    "status", "success",
+                    "record", demoRecord
+            ));
+        } catch (Exception e) {
+            System.err.println("Помилка демо-аналізу: " + e.getMessage());
+            return ResponseEntity.internalServerError().body(Map.of(
+                    "message", "Помилка ML-аналізу: " + e.getMessage(),
+                    "status", "error"
+            ));
+        } finally {
+            if (audioBytes != null) {
+                Arrays.fill(audioBytes, (byte) 0);
+            }
         }
     }
 }

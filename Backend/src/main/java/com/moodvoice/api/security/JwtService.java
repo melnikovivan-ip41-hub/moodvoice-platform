@@ -16,12 +16,15 @@ public class JwtService {
 
     private final SecretKey signingKey;
     private final long expirationMs;
+    private final long refreshExpirationMs;
 
     public JwtService(
             @Value("${app.jwt.secret}") String rawSecret,
-            @Value("${app.jwt.expiration-ms:86400000}") long expirationMs) {
+            @Value("${app.jwt.expiration-ms:3600000}") long expirationMs,
+            @Value("${app.jwt.refresh-expiration-ms:604800000}") long refreshExpirationMs) {
         this.signingKey = buildKey(rawSecret);
         this.expirationMs = expirationMs;
+        this.refreshExpirationMs = refreshExpirationMs;
     }
 
     private SecretKey buildKey(String rawSecret) {
@@ -41,6 +44,20 @@ public class JwtService {
         return Jwts.builder()
                 .subject(email)
                 .claim("role", role)
+                .claim("type", "access")
+                .issuedAt(now)
+                .expiration(expiry)
+                .signWith(signingKey)
+                .compact();
+    }
+
+    public String generateRefreshToken(String email) {
+        Date now = new Date();
+        Date expiry = new Date(now.getTime() + refreshExpirationMs);
+
+        return Jwts.builder()
+                .subject(email)
+                .claim("type", "refresh")
                 .issuedAt(now)
                 .expiration(expiry)
                 .signWith(signingKey)
@@ -57,5 +74,14 @@ public class JwtService {
 
     public String extractEmail(String token) {
         return parseClaims(token).getSubject();
+    }
+
+    public boolean isRefreshToken(String token) {
+        try {
+            Claims claims = parseClaims(token);
+            return "refresh".equals(claims.get("type", String.class));
+        } catch (Exception e) {
+            return false;
+        }
     }
 }

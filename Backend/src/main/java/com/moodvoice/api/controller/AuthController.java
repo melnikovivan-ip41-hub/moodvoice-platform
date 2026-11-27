@@ -69,11 +69,13 @@ public class AuthController {
         userRepository.save(newUser);
 
         String token = jwtService.generateToken(newUser.getEmail(), newUser.getRole());
+        String refreshToken = jwtService.generateRefreshToken(newUser.getEmail());
 
         return ResponseEntity.ok(Map.of(
                 "message", "Успішна реєстрація",
                 "status", "success",
                 "token", token,
+                "refreshToken", refreshToken,
                 "email", newUser.getEmail(),
                 "role", newUser.getRole()
         ));
@@ -125,11 +127,45 @@ public class AuthController {
         }
 
         String token = jwtService.generateToken(user.getEmail(), user.getRole());
+        String refreshToken = jwtService.generateRefreshToken(user.getEmail());
 
         return ResponseEntity.ok(Map.of(
                 "message", "Вхід успішний",
                 "status", "success",
                 "token", token,
+                "refreshToken", refreshToken,
+                "email", user.getEmail(),
+                "role", user.getRole()
+        ));
+    }
+
+    @PostMapping("/refresh")
+    public ResponseEntity<?> refreshToken(@RequestBody Map<String, String> body) {
+        String refreshToken = body.get("refreshToken");
+        if (refreshToken == null || refreshToken.isBlank() || !jwtService.isRefreshToken(refreshToken)) {
+            return ResponseEntity.status(401).body(Map.of(
+                    "status", "error",
+                    "message", "Недійсний або прострочений refresh-токен"
+            ));
+        }
+
+        String email = jwtService.extractEmail(refreshToken);
+        Optional<User> userOpt = userRepository.findByEmail(email);
+        if (userOpt.isEmpty() || userOpt.get().isBlocked()) {
+            return ResponseEntity.status(403).body(Map.of(
+                    "status", "error",
+                    "message", "Користувача не знайдено або заблоковано"
+            ));
+        }
+
+        User user = userOpt.get();
+        String newAccessToken = jwtService.generateToken(user.getEmail(), user.getRole());
+        String newRefreshToken = jwtService.generateRefreshToken(user.getEmail());
+
+        return ResponseEntity.ok(Map.of(
+                "status", "success",
+                "token", newAccessToken,
+                "refreshToken", newRefreshToken,
                 "email", user.getEmail(),
                 "role", user.getRole()
         ));
